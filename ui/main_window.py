@@ -1,7 +1,7 @@
 """
-ui/main_window.py — Root application window for Chronosophy v6.
+ui/main_window.py — Root application window for Chronosophy v7.
 
-v6 additions:
+v7 additions:
 · Frameless window — custom title bar (⟁ icon + title + menus + window controls)
     sits in the same row as the native minimize/maximize/close area, VS Code-style.
     Windows resize is handled via nativeEvent(WM_NCHITTEST). macOS/Linux fall back
@@ -58,22 +58,15 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._settings = settings
         self._icon_path = icon_path
-        # 5-tuple: (query, country, era, sort, favourites_only)
         self._current_filters: tuple = ("", "All", "All", "birth_year", False)
         self._philosophers: list[Philosopher] = []
-        self._ui_scale: float = 1.0          # global zoom level (Ctrl+= / Ctrl+-)
-        self._titlebar_drag_pos = None       # for custom title-bar drag-to-move
+        self._ui_scale: float = 1.0
 
-        # ── Frameless window — we draw our own title bar ──────────────────────
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
-        )
         self.setWindowTitle("Chronosophy — The Philosopher's Axiom")
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
         self.setMinimumSize(1050, 680)
 
-        # Menu is built inline inside _build_header() (VS Code style)
         self._build_ui()
         self._build_shortcuts()
 
@@ -109,73 +102,6 @@ class MainWindow(QMainWindow):
                     "timelineZoom", self.timeline_view.canvas.zoom()
                 )
         super().closeEvent(event)
-
-    # ── Frameless window — Windows resize + cross-platform drag ──────────────
-
-    def nativeEvent(self, eventType, message):
-        """Intercept WM_NCHITTEST on Windows to enable native edge-resize while
-        keeping a fully custom title bar.  On macOS/Linux this is a no-op."""
-        if sys.platform == "win32" and eventType == b"windows_generic_MSG":
-            try:
-                import ctypes, ctypes.wintypes
-                msg = ctypes.cast(
-                    int(message), ctypes.POINTER(ctypes.wintypes.MSG)
-                ).contents
-                if msg.message == 0x0084 and not self.isMaximized():  # WM_NCHITTEST
-                    px = ctypes.c_short(msg.lParam & 0xFFFF).value
-                    py = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                    r  = self.frameGeometry()
-                    b  = 6   # resize-border width in px
-                    L = px - r.left()   < b
-                    R = r.right()  - px < b
-                    T = py - r.top()    < b
-                    B = r.bottom() - py < b
-                    if T and L: return True, 13   # HTTOPLEFT
-                    if T and R: return True, 14   # HTTOPRIGHT
-                    if B and L: return True, 16   # HTBOTTOMLEFT
-                    if B and R: return True, 17   # HTBOTTOMRIGHT
-                    if T:       return True, 12   # HTTOP
-                    if B:       return True, 15   # HTBOTTOM
-                    if L:       return True, 10   # HTLEFT
-                    if R:       return True, 11   # HTRIGHT
-            except Exception:
-                pass
-        return super().nativeEvent(eventType, message)
-
-    def changeEvent(self, event):
-        """Keep the maximise button icon in sync with window state."""
-        from PyQt6.QtCore import QEvent
-        if event.type() == QEvent.Type.WindowStateChange:
-            if hasattr(self, "_btn_max"):
-                self._btn_max.setText("❐" if self.isMaximized() else "□")
-        super().changeEvent(event)
-
-    # ── Title-bar drag (left-button drag on the header = move window) ─────────
-
-    def _titlebar_press(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and not self.isMaximized():
-            self._titlebar_drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
-
-    def _titlebar_move(self, event):
-        if (event.buttons() == Qt.MouseButton.LeftButton
-                and self._titlebar_drag_pos is not None
-                and not self.isMaximized()):
-            self.move(event.globalPosition().toPoint() - self._titlebar_drag_pos)
-
-    def _titlebar_release(self, _event):
-        self._titlebar_drag_pos = None
-
-    def _titlebar_double_click(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._toggle_maximized()
-
-    def _toggle_maximized(self):
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
 
     # ── Global keyboard shortcuts ────────────────────────────────────────────
 
@@ -253,7 +179,6 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QWidget:
         header = QWidget()
         header.setFixedHeight(46)
-        # right margin 0 so the close button sits flush against the window edge
         header.setStyleSheet(f"""
             QWidget {{
                 background: {BG_DEEP};
@@ -261,42 +186,50 @@ class MainWindow(QMainWindow):
             }}
         """)
 
-        # Make the header draggable (move window by dragging the title area)
-        header.mousePressEvent   = self._titlebar_press
-        header.mouseMoveEvent    = self._titlebar_move
-        header.mouseReleaseEvent = self._titlebar_release
-        header.mouseDoubleClickEvent = self._titlebar_double_click
-
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(12, 0, 0, 0)
+        layout.setContentsMargins(14, 0, 22, 0)
         layout.setSpacing(0)
 
-        # ── App icon ─────────────────────────────────────────────────────────
-        logo = QLabel("⟁")
-        logo.setFixedWidth(26)
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setStyleSheet(
-            f"color: {GOLD}; font-size: 18px; background: transparent; border: none;"
-        )
-        layout.addWidget(logo)
-        layout.addSpacing(7)
+        # ── ⟁ Logo button — click to show File / View / Help menu ────────────
+        logo_btn = QPushButton("⟁")
+        logo_btn.setFixedSize(36, 36)
+        logo_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        logo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        logo_btn.setToolTip("Menu  (File · View · Help)")
+        logo_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                color: {GOLD};
+                font-size: 20px;
+                border-radius: 6px;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                background: {BG_RAISED};
+                color: {GOLD_LIGHT};
+            }}
+            QPushButton:pressed {{
+                background: {GOLD_MUTED};
+            }}
+            QPushButton::menu-indicator {{ width: 0; image: none; }}
+        """)
+        # Attach the popup menu — clicking the button shows it automatically
+        logo_btn.setMenu(self._build_app_menu())
+        layout.addWidget(logo_btn)
+        layout.addSpacing(10)
 
-        # ── Title text (restored next to icon) ───────────────────────────────
+        # ── App title ─────────────────────────────────────────────────────────
         title_lbl = QLabel("Chronosophy:  The Philosopher's Axiom")
         title_lbl.setStyleSheet(f"""
             color: {GOLD_LIGHT};
             font-family: 'Georgia', serif;
-            font-size: 13px;
-            letter-spacing: 0.3px;
+            font-size: 14px;
+            letter-spacing: 0.4px;
             background: transparent;
             border: none;
         """)
         layout.addWidget(title_lbl)
-        layout.addSpacing(14)
-
-        # ── Inline menu bar (File | View | Help) ─────────────────────────────
-        self._inline_menu = self._build_inline_menu(header)
-        layout.addWidget(self._inline_menu)
 
         layout.addStretch()
 
@@ -314,7 +247,7 @@ class MainWindow(QMainWindow):
         self._clock_timer.start(1000)
         self._update_clock()
 
-        layout.addSpacing(10)
+        layout.addSpacing(12)
 
         # ── Add philosopher button ────────────────────────────────────────────
         self.btn_add = QPushButton("＋  Add Philosopher")
@@ -324,94 +257,49 @@ class MainWindow(QMainWindow):
         self.btn_add.clicked.connect(self._on_add_philosopher)
         layout.addWidget(self.btn_add)
 
-        layout.addSpacing(10)
-
-        # ── Window controls — flush to right edge ─────────────────────────────
-        # These intercept mousePressEvent so they don't trigger the drag handler
-        self._btn_min   = self._win_ctrl_btn("⎼")
-        self._btn_max   = self._win_ctrl_btn("□")
-        self._btn_close = self._win_ctrl_btn("✕", is_close=True)
-
-        self._btn_min.setToolTip("Minimise")
-        self._btn_max.setToolTip("Maximise / Restore")
-        self._btn_close.setToolTip("Close")
-
-        self._btn_min.clicked.connect(self.showMinimized)
-        self._btn_max.clicked.connect(self._toggle_maximized)
-        self._btn_close.clicked.connect(self.close)
-
-        layout.addWidget(self._btn_min)
-        layout.addWidget(self._btn_max)
-        layout.addWidget(self._btn_close)
-
         return header
 
-    def _win_ctrl_btn(self, icon: str, is_close: bool = False) -> QPushButton:
-        """Create a frameless-window title-bar control button (min/max/close)."""
-        btn = QPushButton(icon)
-        btn.setFixedSize(46, 46)
-        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        hover_bg  = "#C42B1C" if is_close else "rgba(255,255,255,0.09)"
-        hover_col = "white"   if is_close else TEXT_PRI
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                border: none;
-                color: {TEXT_SEC};
-                font-size: 14px;
-                border-radius: 0;
-                padding: 0;
-            }}
-            QPushButton:hover {{
-                background: {hover_bg};
-                color: {hover_col};
-            }}
-            QPushButton:pressed {{
-                background: {"#9E1A0E" if is_close else "rgba(255,255,255,0.04)"};
-            }}
-        """)
-        return btn
+    def _build_app_menu(self) -> "QMenu":
+        """Build the popup QMenu that drops down from the ⟁ logo button.
 
-    def _build_inline_menu(self, parent: QWidget):
-        """Build the inline VS Code-style menu bar.
-
-        This is a regular QMenuBar widget placed inside the header layout
-        rather than set as the window menu bar. Menus open downward as normal.
-        Keyboard shortcuts are all covered by QShortcut in _build_shortcuts().
+        Three submenus — File, View, Help — exactly mirroring what the old
+        inline menu bar had, but now hidden until the user clicks the logo.
+        All keyboard shortcuts are still active via QShortcut (_build_shortcuts).
         """
-        from PyQt6.QtWidgets import QMenuBar as _QMenuBar
-        mb = _QMenuBar(parent)
-        mb.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-
-        # Style the menu bar to be seamless with the BG_DEEP header
-        mb.setStyleSheet(f"""
-            QMenuBar {{
-                background: transparent;
-                border: none;
-                padding: 0 2px;
+        qss = f"""
+            QMenu {{
+                background: {BG_SURFACE};
+                border: 1px solid {BORDER_LT};
+                border-radius: 8px;
+                padding: 4px;
                 font-family: 'Georgia', serif;
                 font-size: 12px;
             }}
-            QMenuBar::item {{
-                background: transparent;
-                color: {TEXT_SEC};
-                padding: 6px 12px;
-                border-radius: 4px;
-                margin: 0 1px;
+            QMenu::item {{
+                padding: 7px 28px 7px 18px;
+                border-radius: 5px;
+                color: {TEXT_PRI};
             }}
-            QMenuBar::item:selected {{
-                background: {BG_RAISED};
-                color: {GOLD};
-            }}
-            QMenuBar::item:pressed {{
+            QMenu::item:selected {{
                 background: {GOLD_DIM};
                 color: {GOLD_LIGHT};
             }}
-        """)
+            QMenu::item:disabled {{ color: {TEXT_DIM}; }}
+            QMenu::separator {{
+                height: 1px;
+                background: {BORDER};
+                margin: 4px 8px;
+            }}
+            QMenu::right-arrow {{ width: 0; }}
+        """
+
+        from PyQt6.QtWidgets import QMenu as _QMenu
+        root = _QMenu(self)
+        root.setStyleSheet(qss)
 
         # ── File ──────────────────────────────────────────────────────────
-        file_menu = mb.addMenu("File")
-        file_menu.setStyleSheet(self._menu_qss())
+        file_menu = root.addMenu("  File")
+        file_menu.setStyleSheet(qss)
 
         act_csv = QAction("Export to CSV…", self)
         act_csv.triggered.connect(self._on_export_csv)
@@ -428,8 +316,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(act_quit)
 
         # ── View ──────────────────────────────────────────────────────────
-        view_menu = mb.addMenu("View")
-        view_menu.setStyleSheet(self._menu_qss())
+        view_menu = root.addMenu("  View")
+        view_menu.setStyleSheet(qss)
 
         act_fs = QAction("Toggle Fullscreen", self)
         act_fs.triggered.connect(self._toggle_fullscreen)
@@ -446,8 +334,8 @@ class MainWindow(QMainWindow):
             view_menu.addAction(act)
 
         # ── Help ──────────────────────────────────────────────────────────
-        help_menu = mb.addMenu("Help")
-        help_menu.setStyleSheet(self._menu_qss())
+        help_menu = root.addMenu("  Help")
+        help_menu.setStyleSheet(qss)
 
         act_sc = QAction("Keyboard Shortcuts…", self)
         act_sc.triggered.connect(lambda: ShortcutsDialog(self).exec())
@@ -459,35 +347,7 @@ class MainWindow(QMainWindow):
         act_ab.triggered.connect(lambda: AboutDialog(self).exec())
         help_menu.addAction(act_ab)
 
-        return mb
-
-    def _menu_qss(self) -> str:
-        """Shared dropdown menu stylesheet."""
-        return f"""
-            QMenu {{
-                background: {BG_SURFACE};
-                border: 1px solid {BORDER_LT};
-                border-radius: 6px;
-                padding: 4px;
-                font-family: 'Georgia', serif;
-                font-size: 12px;
-            }}
-            QMenu::item {{
-                padding: 7px 24px 7px 16px;
-                border-radius: 4px;
-                color: {TEXT_PRI};
-            }}
-            QMenu::item:selected {{
-                background: {GOLD_DIM};
-                color: {GOLD_LIGHT};
-            }}
-            QMenu::item:disabled {{ color: {TEXT_DIM}; }}
-            QMenu::separator {{
-                height: 1px;
-                background: {BORDER};
-                margin: 4px 8px;
-            }}
-        """
+        return root
 
     def _update_clock(self):
         try:
@@ -672,7 +532,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, str, str, str, bool)
     def _on_filters_changed(self, query: str, country: str, era: str,
-                            sort: str, favs_only: bool):
+                                sort: str, favs_only: bool):
         self._current_filters = (query, country, era, sort, favs_only)
         self._load_data()
 

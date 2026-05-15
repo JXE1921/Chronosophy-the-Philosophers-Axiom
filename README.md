@@ -1,4 +1,4 @@
-# Chronosophy — The Philosopher's Axiom  ·  v6
+# Chronosophy — The Philosopher's Axiom  ·  v7
 
 A premium dark-themed desktop application for exploring the history of philosophy.
 Custom-painted views, a force-directed influence graph, a painted world map,
@@ -26,7 +26,7 @@ data is preserved.
 
 ---
 
-## What's New in v6
+## What's New in v7
 
 | Feature | Details |
 |---|---|
@@ -97,11 +97,11 @@ chronosophy/
 philosophers  (id, name, birth_year, death_year, birth_city, birth_country,
                teachers, contributions)
 
-quotes        (id, philosopher_id FK, text, is_favourite)  -- v6: is_favourite added
+quotes        (id, philosopher_id FK, text, is_favourite)  -- v7: is_favourite added
 
 daily_quote   (id=1, quote_id, selected_on)                -- singleton row
 
-teacher_links (id, student_id FK, teacher_id FK)           -- v6: parsed from teachers field
+teacher_links (id, student_id FK, teacher_id FK)           -- v7: parsed from teachers field
 ```
 
 ---

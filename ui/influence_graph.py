@@ -197,7 +197,7 @@ class InfluenceGraphCanvas(QWidget):
             painter.setPen(QColor(TEXT_DIM))
             painter.setFont(QFont("Georgia", 14, QFont.Weight.Normal, True))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                                "No philosophers to graph.")
+                            "No philosophers to graph.")
             painter.end()
             return
 
