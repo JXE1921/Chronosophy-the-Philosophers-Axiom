@@ -3,7 +3,7 @@ ui/timeline_widget.py — Chronological philosopher timeline.
 Custom-painted scrollable canvas with proportional year positioning,
 era bands, and clickable philosopher cards.
 
-v9 changes:
+v10 changes:
 - Ctrl + scroll wheel zooms the timeline horizontally (anchored at the cursor)
 - Plain scroll wheel pans horizontally (faster than dragging the scrollbar)
 - Middle-mouse drag also pans horizontally

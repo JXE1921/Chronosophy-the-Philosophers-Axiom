@@ -219,6 +219,12 @@ class MainWindow(QMainWindow):
                 border-radius: 5px;
                 padding: 2px 9px;
             """)
+            # Rescale the fixed width so the box stays constant at any zoom level.
+            base = getattr(self, '_clock_fixed_width_base', 90)
+            self.clock_label.setFixedWidth(int(base * s))
+            self.clock_label.setAlignment(
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+            )
 
 
 
@@ -319,6 +325,14 @@ class MainWindow(QMainWindow):
             border: 1px solid {BORDER}; border-radius: 5px; padding: 2px 9px;
         """)
         self.clock_label.setToolTip("London time (Europe/London)")
+        # Fix the width so the border box never resizes as digits change.
+        # "00:00:00" uses the widest digit-set in most proportional fonts;
+        # measure it once at the default scale and lock the label to that size.
+        self.clock_label.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._clock_fixed_width_base = 116  # pixels at scale 1.0 — recalc on zoom
+        self.clock_label.setFixedWidth(self._clock_fixed_width_base)
         layout.addWidget(self.clock_label)
         self._clock_timer = QTimer(self)
         self._clock_timer.timeout.connect(self._update_clock)
