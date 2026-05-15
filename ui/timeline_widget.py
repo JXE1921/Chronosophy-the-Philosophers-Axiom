@@ -3,7 +3,7 @@ ui/timeline_widget.py — Chronological philosopher timeline.
 Custom-painted scrollable canvas with proportional year positioning,
 era bands, and clickable philosopher cards.
 
-v5 changes:
+v6 changes:
 - Ctrl + scroll wheel zooms the timeline horizontally (anchored at the cursor)
 - Plain scroll wheel pans horizontally (faster than dragging the scrollbar)
 - Middle-mouse drag also pans horizontally
@@ -14,7 +14,7 @@ v5 changes:
 
 from PyQt6.QtWidgets import (
     QWidget, QScrollArea, QVBoxLayout, QHBoxLayout, QLabel,
-    QSizePolicy, QToolTip
+    QSizePolicy, QToolTip, QPushButton
 )
 from PyQt6.QtCore import Qt, QRect, QPoint, pyqtSignal, QSize
 from PyQt6.QtGui import (
@@ -547,7 +547,7 @@ class TimelineView(QWidget):
         w.setFixedHeight(36)
         w.setStyleSheet(f"background: {BG_SURFACE}; border-bottom: 1px solid {BORDER};")
         layout = QHBoxLayout(w)
-        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setContentsMargins(16, 0, 10, 0)
         layout.setSpacing(12)
 
         title = QLabel("ERA KEY")
@@ -565,6 +565,17 @@ class TimelineView(QWidget):
             layout.addWidget(lbl)
 
         layout.addStretch()
+
+        # Reset View button — matches the style used in Graph and World Map toolbars
+        btn_reset = QPushButton("⤺  Reset View")
+        btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reset.setToolTip("Reset zoom to default level")
+        # Lambda captures self lazily — self.canvas exists by the time this fires
+        btn_reset.clicked.connect(
+            lambda: self.canvas.set_zoom(TimelineCanvas.DEFAULT_ZOOM)
+        )
+        layout.addWidget(btn_reset)
+
         return w
 
     def set_philosophers(self, philosophers: list[Philosopher]):

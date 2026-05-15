@@ -1,17 +1,16 @@
 """
-ui/main_window.py — Root application window for Chronosophy v5.
+ui/main_window.py — Root application window for Chronosophy v6.
 
-Coordinates:
-· Sidebar list (philosophers)
-· Search / filter bar (now 5-arg signal including favourites_only)
-· Daily quote widget (with favourite toggle)
-· Clock (London time)
-· Five tabs: Timeline, By Country, Influence Graph, World Map, Statistics
-· Menu bar: File, View, Help
-· Keyboard shortcuts (Ctrl+1–5 tabs, Ctrl+N, Ctrl+F, Ctrl+E, F11)
-· Comparison dialog (select two philosophers, click Compare)
-· "Show in Graph" wiring from DetailDialog → Influence Graph tab + centre_on
+v6 additions:
+· Frameless window — custom title bar (⟁ icon + title + menus + window controls)
+    sits in the same row as the native minimize/maximize/close area, VS Code-style.
+    Windows resize is handled via nativeEvent(WM_NCHITTEST). macOS/Linux fall back
+    to manual mouse-drag. No extra dependencies — ctypes only (stdlib).
+· Timeline zoom persisted in QSettings so it survives restarts.
+· Timeline Reset View button (matches Graph / World Map).
 """
+
+import sys
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
@@ -63,7 +62,12 @@ class MainWindow(QMainWindow):
         self._current_filters: tuple = ("", "All", "All", "birth_year", False)
         self._philosophers: list[Philosopher] = []
         self._ui_scale: float = 1.0          # global zoom level (Ctrl+= / Ctrl+-)
+        self._titlebar_drag_pos = None       # for custom title-bar drag-to-move
 
+        # ── Frameless window — we draw our own title bar ──────────────────────
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
+        )
         self.setWindowTitle("Chronosophy — The Philosopher's Axiom")
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
@@ -78,6 +82,17 @@ class MainWindow(QMainWindow):
     def load_initial_data(self):
         self._load_data()
         self.stats_view.refresh()
+        # Restore timeline zoom from previous session
+        if self._settings:
+            saved_zoom = self._settings.value("timelineZoom", type=float)
+            if saved_zoom and saved_zoom > 0:
+                self.timeline_view.canvas.set_zoom(saved_zoom)
+
+    @pyqtSlot(float)
+    def _on_timeline_zoom_changed(self, zoom: float):
+        """Immediately persist the new timeline zoom to QSettings."""
+        if self._settings:
+            self._settings.setValue("timelineZoom", zoom)
 
     # ── Window state persistence ─────────────────────────────────────────────
 
@@ -88,7 +103,79 @@ class MainWindow(QMainWindow):
             self._settings.setValue("windowMaximised",
                                     self.windowState() == Qt.WindowState.WindowMaximized)
             self._settings.setValue("windowFullscreen", self.isFullScreen())
+            # Persist current timeline zoom so next session opens at the same level
+            if hasattr(self, 'timeline_view'):
+                self._settings.setValue(
+                    "timelineZoom", self.timeline_view.canvas.zoom()
+                )
         super().closeEvent(event)
+
+    # ── Frameless window — Windows resize + cross-platform drag ──────────────
+
+    def nativeEvent(self, eventType, message):
+        """Intercept WM_NCHITTEST on Windows to enable native edge-resize while
+        keeping a fully custom title bar.  On macOS/Linux this is a no-op."""
+        if sys.platform == "win32" and eventType == b"windows_generic_MSG":
+            try:
+                import ctypes, ctypes.wintypes
+                msg = ctypes.cast(
+                    int(message), ctypes.POINTER(ctypes.wintypes.MSG)
+                ).contents
+                if msg.message == 0x0084 and not self.isMaximized():  # WM_NCHITTEST
+                    px = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    py = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    r  = self.frameGeometry()
+                    b  = 6   # resize-border width in px
+                    L = px - r.left()   < b
+                    R = r.right()  - px < b
+                    T = py - r.top()    < b
+                    B = r.bottom() - py < b
+                    if T and L: return True, 13   # HTTOPLEFT
+                    if T and R: return True, 14   # HTTOPRIGHT
+                    if B and L: return True, 16   # HTBOTTOMLEFT
+                    if B and R: return True, 17   # HTBOTTOMRIGHT
+                    if T:       return True, 12   # HTTOP
+                    if B:       return True, 15   # HTBOTTOM
+                    if L:       return True, 10   # HTLEFT
+                    if R:       return True, 11   # HTRIGHT
+            except Exception:
+                pass
+        return super().nativeEvent(eventType, message)
+
+    def changeEvent(self, event):
+        """Keep the maximise button icon in sync with window state."""
+        from PyQt6.QtCore import QEvent
+        if event.type() == QEvent.Type.WindowStateChange:
+            if hasattr(self, "_btn_max"):
+                self._btn_max.setText("❐" if self.isMaximized() else "□")
+        super().changeEvent(event)
+
+    # ── Title-bar drag (left-button drag on the header = move window) ─────────
+
+    def _titlebar_press(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and not self.isMaximized():
+            self._titlebar_drag_pos = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
+
+    def _titlebar_move(self, event):
+        if (event.buttons() == Qt.MouseButton.LeftButton
+                and self._titlebar_drag_pos is not None
+                and not self.isMaximized()):
+            self.move(event.globalPosition().toPoint() - self._titlebar_drag_pos)
+
+    def _titlebar_release(self, _event):
+        self._titlebar_drag_pos = None
+
+    def _titlebar_double_click(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._toggle_maximized()
+
+    def _toggle_maximized(self):
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
 
     # ── Global keyboard shortcuts ────────────────────────────────────────────
 
@@ -166,27 +253,48 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QWidget:
         header = QWidget()
         header.setFixedHeight(46)
+        # right margin 0 so the close button sits flush against the window edge
         header.setStyleSheet(f"""
             QWidget {{
                 background: {BG_DEEP};
                 border-bottom: 1px solid {BORDER};
             }}
         """)
+
+        # Make the header draggable (move window by dragging the title area)
+        header.mousePressEvent   = self._titlebar_press
+        header.mouseMoveEvent    = self._titlebar_move
+        header.mouseReleaseEvent = self._titlebar_release
+        header.mouseDoubleClickEvent = self._titlebar_double_click
+
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(12, 0, 16, 0)
+        layout.setContentsMargins(12, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── App icon (no text — VS Code style) ──────────────────────────────
+        # ── App icon ─────────────────────────────────────────────────────────
         logo = QLabel("⟁")
-        logo.setFixedWidth(34)
+        logo.setFixedWidth(26)
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setStyleSheet(f"color: {GOLD}; font-size: 20px; background: transparent; border: none;")
+        logo.setStyleSheet(
+            f"color: {GOLD}; font-size: 18px; background: transparent; border: none;"
+        )
         layout.addWidget(logo)
+        layout.addSpacing(7)
 
-        # ── Inline menu bar — sits right next to the icon, just like VS Code ─
-        # We create this as a standalone QMenuBar widget (not the window menu bar)
-        # so it appears inline. All keyboard shortcuts are handled by QShortcut
-        # instances in _build_shortcuts(), so nothing is lost.
+        # ── Title text (restored next to icon) ───────────────────────────────
+        title_lbl = QLabel("Chronosophy:  The Philosopher's Axiom")
+        title_lbl.setStyleSheet(f"""
+            color: {GOLD_LIGHT};
+            font-family: 'Georgia', serif;
+            font-size: 13px;
+            letter-spacing: 0.3px;
+            background: transparent;
+            border: none;
+        """)
+        layout.addWidget(title_lbl)
+        layout.addSpacing(14)
+
+        # ── Inline menu bar (File | View | Help) ─────────────────────────────
         self._inline_menu = self._build_inline_menu(header)
         layout.addWidget(self._inline_menu)
 
@@ -216,7 +324,53 @@ class MainWindow(QMainWindow):
         self.btn_add.clicked.connect(self._on_add_philosopher)
         layout.addWidget(self.btn_add)
 
+        layout.addSpacing(10)
+
+        # ── Window controls — flush to right edge ─────────────────────────────
+        # These intercept mousePressEvent so they don't trigger the drag handler
+        self._btn_min   = self._win_ctrl_btn("⎼")
+        self._btn_max   = self._win_ctrl_btn("□")
+        self._btn_close = self._win_ctrl_btn("✕", is_close=True)
+
+        self._btn_min.setToolTip("Minimise")
+        self._btn_max.setToolTip("Maximise / Restore")
+        self._btn_close.setToolTip("Close")
+
+        self._btn_min.clicked.connect(self.showMinimized)
+        self._btn_max.clicked.connect(self._toggle_maximized)
+        self._btn_close.clicked.connect(self.close)
+
+        layout.addWidget(self._btn_min)
+        layout.addWidget(self._btn_max)
+        layout.addWidget(self._btn_close)
+
         return header
+
+    def _win_ctrl_btn(self, icon: str, is_close: bool = False) -> QPushButton:
+        """Create a frameless-window title-bar control button (min/max/close)."""
+        btn = QPushButton(icon)
+        btn.setFixedSize(46, 46)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        hover_bg  = "#C42B1C" if is_close else "rgba(255,255,255,0.09)"
+        hover_col = "white"   if is_close else TEXT_PRI
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                color: {TEXT_SEC};
+                font-size: 14px;
+                border-radius: 0;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                background: {hover_bg};
+                color: {hover_col};
+            }}
+            QPushButton:pressed {{
+                background: {"#9E1A0E" if is_close else "rgba(255,255,255,0.04)"};
+            }}
+        """)
+        return btn
 
     def _build_inline_menu(self, parent: QWidget):
         """Build the inline VS Code-style menu bar.
@@ -456,6 +610,8 @@ class MainWindow(QMainWindow):
         # TAB_TIMELINE = 0
         self.timeline_view = TimelineView()
         self.timeline_view.philosopher_clicked.connect(self._on_philosopher_clicked)
+        # Persist zoom as it changes so the value survives crashes too
+        self.timeline_view.canvas.zoom_changed.connect(self._on_timeline_zoom_changed)
         self.tabs.addTab(self.timeline_view, "📅  Timeline")
 
         # TAB_COUNTRY = 1
