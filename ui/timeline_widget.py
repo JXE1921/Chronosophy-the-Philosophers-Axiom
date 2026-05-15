@@ -3,7 +3,7 @@ ui/timeline_widget.py — Chronological philosopher timeline.
 Custom-painted scrollable canvas with proportional year positioning,
 era bands, and clickable philosopher cards.
 
-v4 changes:
+v5 changes:
 - Ctrl + scroll wheel zooms the timeline horizontally (anchored at the cursor)
 - Plain scroll wheel pans horizontally (faster than dragging the scrollbar)
 - Middle-mouse drag also pans horizontally
@@ -354,40 +354,43 @@ class TimelineCanvas(QWidget):
     # we treat the gesture as a pan rather than a click.
     _DRAG_THRESHOLD = 6
 
+    def _pan_scroll(self, new_global: QPoint, anchor: QPoint):
+        """Move both scroll bars by the delta between two GLOBAL screen positions.
+
+        Using global coordinates is critical: when setValue() repositions the
+        viewport the canvas-local mouse position changes, but the global screen
+        position never does. This is what eliminates the jitter/shake.
+        """
+        scroll = self._find_scroll_area()
+        if scroll:
+            delta = new_global - anchor
+            scroll.horizontalScrollBar().setValue(
+                scroll.horizontalScrollBar().value() - delta.x()
+            )
+            scroll.verticalScrollBar().setValue(
+                scroll.verticalScrollBar().value() - delta.y()
+            )
+
     def mouseMoveEvent(self, event):
-        # ── Middle-button drag pan (any direction) ──────────────────────────
+        g = event.globalPosition().toPoint()
+
+        # ── Middle-button drag pan ───────────────────────────────────────────
         if self._pan_anchor is not None:
-            scroll = self._find_scroll_area()
-            if scroll:
-                delta = event.pos() - self._pan_anchor
-                scroll.horizontalScrollBar().setValue(
-                    scroll.horizontalScrollBar().value() - delta.x()
-                )
-                scroll.verticalScrollBar().setValue(
-                    scroll.verticalScrollBar().value() - delta.y()
-                )
-                self._pan_anchor = event.pos()
+            self._pan_scroll(g, self._pan_anchor)
+            self._pan_anchor = g
             return
 
-        # ── Left-button drag pan (started on empty space) ───────────────────
+        # ── Left-button drag pan (started on empty space) ────────────────────
         if self._left_pan_anchor is not None:
-            scroll = self._find_scroll_area()
-            if scroll:
-                delta = event.pos() - self._left_pan_anchor
-                scroll.horizontalScrollBar().setValue(
-                    scroll.horizontalScrollBar().value() - delta.x()
-                )
-                scroll.verticalScrollBar().setValue(
-                    scroll.verticalScrollBar().value() - delta.y()
-                )
-                self._left_pan_anchor = event.pos()
+            self._pan_scroll(g, self._left_pan_anchor)
+            self._left_pan_anchor = g
             return
 
-        # ── Left pressed on a bar, but now dragging — promote to pan ────────
+        # ── Left pressed on a bar, but now dragging — promote to pan ─────────
         if self._press_bar_pid >= 0 and self._press_bar_pos is not None:
+            # Compare using local pos for the drag threshold (stable while not yet panning)
             if (event.pos() - self._press_bar_pos).manhattanLength() > self._DRAG_THRESHOLD:
-                # User intended to pan, not click
-                self._left_pan_anchor = event.pos()
+                self._left_pan_anchor = g
                 self._press_bar_pid = -1
                 self._press_bar_pos = None
                 self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
@@ -422,9 +425,9 @@ class TimelineCanvas(QWidget):
                 QToolTip.hideText()
 
     def mousePressEvent(self, event):
-        # Middle button → pan (any direction)
+        # Middle button → pan (any direction), anchor in global coords
         if event.button() == Qt.MouseButton.MiddleButton:
-            self._pan_anchor = event.pos()
+            self._pan_anchor = event.globalPosition().toPoint()
             self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             return
 
@@ -433,12 +436,11 @@ class TimelineCanvas(QWidget):
             # Check if pressing on a philosopher bar
             for rect, pid in self._hit_rects:
                 if rect.contains(pos):
-                    # Record the press; we'll emit on release if no drag happened
                     self._press_bar_pid = pid
-                    self._press_bar_pos = pos
+                    self._press_bar_pos = pos   # local coords fine for threshold check
                     return
-            # Pressing on empty canvas → start pan immediately
-            self._left_pan_anchor = pos
+            # Pressing on empty canvas → pan, anchor in global coords
+            self._left_pan_anchor = event.globalPosition().toPoint()
             self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
 
     def mouseReleaseEvent(self, event):
@@ -454,12 +456,11 @@ class TimelineCanvas(QWidget):
                 self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
                 return
 
-            # Releasing after pressing on a bar (no significant drag) → it's a click
+            # Releasing after pressing on a bar (no significant drag) → click
             pid = self._press_bar_pid
             self._press_bar_pid = -1
             self._press_bar_pos = None
             if pid >= 0:
-                # Confirm the cursor is still over the same bar on release
                 pos = event.pos()
                 for rect, rpid in self._hit_rects:
                     if rect.contains(pos) and rpid == pid:

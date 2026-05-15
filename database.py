@@ -3,7 +3,7 @@ database.py — SQLite data layer for Chronosophy.
 Handles all persistence: CRUD for philosophers, quotes, favourites, daily quote,
 teacher relationship graph, and aggregate statistics.
 
-v4 additions:
+v5 additions:
 - quotes.is_favourite column (with migration for existing databases)
 - teacher_links table for normalised many-to-many relationships
 - get_random_quote (used by the New Quote button — no more raw SQL in UI)
@@ -112,7 +112,7 @@ def initialise_db() -> None:
                 selected_on      TEXT    NOT NULL       -- ISO date string
             );
 
-            -- v4: normalised teacher graph
+            -- v5: normalised teacher graph
             CREATE TABLE IF NOT EXISTS teacher_links (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id  INTEGER NOT NULL REFERENCES philosophers(id) ON DELETE CASCADE,

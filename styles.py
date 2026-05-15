@@ -45,7 +45,7 @@ COUNTRY_COLORS = [
     "#3C7E6B", "#5E3C7E", "#6B5E3C", "#3C4E7E",
 ]
 
-# ─── v4 additions ─────────────────────────────────────────────────────────────
+# ─── v5 additions ─────────────────────────────────────────────────────────────
 # Graph view tokens
 GRAPH_NODE_FILL      = "#22222E"
 GRAPH_NODE_HOVER     = "#3A3A50"

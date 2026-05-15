@@ -1,5 +1,5 @@
 """
-ui/main_window.py — Root application window for Chronosophy v4.
+ui/main_window.py — Root application window for Chronosophy v5.
 
 Coordinates:
 · Sidebar list (philosophers)
@@ -69,7 +69,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(icon_path))
         self.setMinimumSize(1050, 680)
 
-        self._build_menu()
+        # Menu is built inline inside _build_header() (VS Code style)
         self._build_ui()
         self._build_shortcuts()
 
@@ -89,62 +89,6 @@ class MainWindow(QMainWindow):
                                     self.windowState() == Qt.WindowState.WindowMaximized)
             self._settings.setValue("windowFullscreen", self.isFullScreen())
         super().closeEvent(event)
-
-    # ── Menu bar ─────────────────────────────────────────────────────────────
-
-    def _build_menu(self):
-        mb = self.menuBar()
-
-        # ── File ──────────────────────────────────────────────────────────
-        file_menu = mb.addMenu("File")
-
-        act_export_csv = QAction("Export to CSV…", self)
-        act_export_csv.setShortcut(QKeySequence("Ctrl+E"))
-        act_export_csv.triggered.connect(self._on_export_csv)
-        file_menu.addAction(act_export_csv)
-
-        act_export_json = QAction("Export to JSON…", self)
-        act_export_json.triggered.connect(self._on_export_json)
-        file_menu.addAction(act_export_json)
-
-        file_menu.addSeparator()
-
-        act_quit = QAction("Quit", self)
-        act_quit.setShortcut(QKeySequence("Ctrl+Q"))
-        act_quit.triggered.connect(self.close)
-        file_menu.addAction(act_quit)
-
-        # ── View ──────────────────────────────────────────────────────────
-        view_menu = mb.addMenu("View")
-
-        act_fullscreen = QAction("Toggle Fullscreen", self)
-        act_fullscreen.setShortcut(QKeySequence("F11"))
-        act_fullscreen.triggered.connect(self._toggle_fullscreen)
-        view_menu.addAction(act_fullscreen)
-
-        view_menu.addSeparator()
-
-        # Tab switchers
-        for idx, label in enumerate([
-            "Timeline", "By Country", "Influence Graph", "World Map", "Statistics"
-        ], start=1):
-            act = QAction(f"{label}  (Ctrl+{idx})", self)
-            act.setShortcut(QKeySequence(f"Ctrl+{idx}"))
-            act.triggered.connect(lambda checked, i=idx - 1: self.tabs.setCurrentIndex(i))
-            view_menu.addAction(act)
-
-        # ── Help ──────────────────────────────────────────────────────────
-        help_menu = mb.addMenu("Help")
-
-        act_shortcuts = QAction("Keyboard Shortcuts…", self)
-        act_shortcuts.triggered.connect(lambda: ShortcutsDialog(self).exec())
-        help_menu.addAction(act_shortcuts)
-
-        help_menu.addSeparator()
-
-        act_about = QAction("About Chronosophy…", self)
-        act_about.triggered.connect(lambda: AboutDialog(self).exec())
-        help_menu.addAction(act_about)
 
     # ── Global keyboard shortcuts ────────────────────────────────────────────
 
@@ -221,7 +165,7 @@ class MainWindow(QMainWindow):
 
     def _build_header(self) -> QWidget:
         header = QWidget()
-        header.setFixedHeight(58)
+        header.setFixedHeight(46)
         header.setStyleSheet(f"""
             QWidget {{
                 background: {BG_DEEP};
@@ -229,34 +173,31 @@ class MainWindow(QMainWindow):
             }}
         """)
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(22, 0, 22, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 0, 16, 0)
+        layout.setSpacing(0)
 
+        # ── App icon (no text — VS Code style) ──────────────────────────────
         logo = QLabel("⟁")
-        logo.setStyleSheet(f"color: {GOLD}; font-size: 22px; background: transparent; border: none;")
+        logo.setFixedWidth(34)
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setStyleSheet(f"color: {GOLD}; font-size: 20px; background: transparent; border: none;")
         layout.addWidget(logo)
 
-        title = QLabel("Chronosophy:")
-        title.setStyleSheet(f"""
-            color: {GOLD_LIGHT}; font-family: 'Georgia', serif;
-            font-size: 18px; letter-spacing: 0.5px; background: transparent; border: none;
-        """)
-        layout.addWidget(title)
+        # ── Inline menu bar — sits right next to the icon, just like VS Code ─
+        # We create this as a standalone QMenuBar widget (not the window menu bar)
+        # so it appears inline. All keyboard shortcuts are handled by QShortcut
+        # instances in _build_shortcuts(), so nothing is lost.
+        self._inline_menu = self._build_inline_menu(header)
+        layout.addWidget(self._inline_menu)
 
-        subtitle = QLabel("The Philosopher's Axiom")
-        subtitle.setStyleSheet(f"""
-            color: {TEXT_SEC}; font-family: 'Georgia', serif;
-            font-size: 14px; font-style: italic; background: transparent; border: none;
-        """)
-        layout.addWidget(subtitle)
         layout.addStretch()
 
-        # London clock
+        # ── London clock ─────────────────────────────────────────────────────
         self.clock_label = QLabel()
         self.clock_label.setStyleSheet(f"""
             color: {TEXT_SEC}; font-family: 'Georgia', serif;
-            font-size: 13px; letter-spacing: 1px; background: transparent;
-            border: 1px solid {BORDER}; border-radius: 5px; padding: 3px 10px;
+            font-size: 12px; letter-spacing: 1px; background: transparent;
+            border: 1px solid {BORDER}; border-radius: 5px; padding: 2px 9px;
         """)
         self.clock_label.setToolTip("London time (Europe/London)")
         layout.addWidget(self.clock_label)
@@ -265,16 +206,134 @@ class MainWindow(QMainWindow):
         self._clock_timer.start(1000)
         self._update_clock()
 
-        layout.addSpacing(12)
+        layout.addSpacing(10)
 
+        # ── Add philosopher button ────────────────────────────────────────────
         self.btn_add = QPushButton("＋  Add Philosopher")
         self.btn_add.setObjectName("btn_primary")
-        self.btn_add.setFixedHeight(36)
+        self.btn_add.setFixedHeight(32)
         self.btn_add.setToolTip("Add a new philosopher  (Ctrl+N)")
         self.btn_add.clicked.connect(self._on_add_philosopher)
         layout.addWidget(self.btn_add)
 
         return header
+
+    def _build_inline_menu(self, parent: QWidget):
+        """Build the inline VS Code-style menu bar.
+
+        This is a regular QMenuBar widget placed inside the header layout
+        rather than set as the window menu bar. Menus open downward as normal.
+        Keyboard shortcuts are all covered by QShortcut in _build_shortcuts().
+        """
+        from PyQt6.QtWidgets import QMenuBar as _QMenuBar
+        mb = _QMenuBar(parent)
+        mb.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+
+        # Style the menu bar to be seamless with the BG_DEEP header
+        mb.setStyleSheet(f"""
+            QMenuBar {{
+                background: transparent;
+                border: none;
+                padding: 0 2px;
+                font-family: 'Georgia', serif;
+                font-size: 12px;
+            }}
+            QMenuBar::item {{
+                background: transparent;
+                color: {TEXT_SEC};
+                padding: 6px 12px;
+                border-radius: 4px;
+                margin: 0 1px;
+            }}
+            QMenuBar::item:selected {{
+                background: {BG_RAISED};
+                color: {GOLD};
+            }}
+            QMenuBar::item:pressed {{
+                background: {GOLD_DIM};
+                color: {GOLD_LIGHT};
+            }}
+        """)
+
+        # ── File ──────────────────────────────────────────────────────────
+        file_menu = mb.addMenu("File")
+        file_menu.setStyleSheet(self._menu_qss())
+
+        act_csv = QAction("Export to CSV…", self)
+        act_csv.triggered.connect(self._on_export_csv)
+        file_menu.addAction(act_csv)
+
+        act_json = QAction("Export to JSON…", self)
+        act_json.triggered.connect(self._on_export_json)
+        file_menu.addAction(act_json)
+
+        file_menu.addSeparator()
+
+        act_quit = QAction("Quit", self)
+        act_quit.triggered.connect(self.close)
+        file_menu.addAction(act_quit)
+
+        # ── View ──────────────────────────────────────────────────────────
+        view_menu = mb.addMenu("View")
+        view_menu.setStyleSheet(self._menu_qss())
+
+        act_fs = QAction("Toggle Fullscreen", self)
+        act_fs.triggered.connect(self._toggle_fullscreen)
+        view_menu.addAction(act_fs)
+
+        view_menu.addSeparator()
+
+        for idx, label in enumerate(
+            ["Timeline", "By Country", "Influence Graph", "World Map", "Statistics"],
+            start=1,
+        ):
+            act = QAction(f"{label}  (Ctrl+{idx})", self)
+            act.triggered.connect(lambda checked, i=idx - 1: self.tabs.setCurrentIndex(i))
+            view_menu.addAction(act)
+
+        # ── Help ──────────────────────────────────────────────────────────
+        help_menu = mb.addMenu("Help")
+        help_menu.setStyleSheet(self._menu_qss())
+
+        act_sc = QAction("Keyboard Shortcuts…", self)
+        act_sc.triggered.connect(lambda: ShortcutsDialog(self).exec())
+        help_menu.addAction(act_sc)
+
+        help_menu.addSeparator()
+
+        act_ab = QAction("About Chronosophy…", self)
+        act_ab.triggered.connect(lambda: AboutDialog(self).exec())
+        help_menu.addAction(act_ab)
+
+        return mb
+
+    def _menu_qss(self) -> str:
+        """Shared dropdown menu stylesheet."""
+        return f"""
+            QMenu {{
+                background: {BG_SURFACE};
+                border: 1px solid {BORDER_LT};
+                border-radius: 6px;
+                padding: 4px;
+                font-family: 'Georgia', serif;
+                font-size: 12px;
+            }}
+            QMenu::item {{
+                padding: 7px 24px 7px 16px;
+                border-radius: 4px;
+                color: {TEXT_PRI};
+            }}
+            QMenu::item:selected {{
+                background: {GOLD_DIM};
+                color: {GOLD_LIGHT};
+            }}
+            QMenu::item:disabled {{ color: {TEXT_DIM}; }}
+            QMenu::separator {{
+                height: 1px;
+                background: {BORDER};
+                margin: 4px 8px;
+            }}
+        """
 
     def _update_clock(self):
         try:
@@ -457,7 +516,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, str, str, str, bool)
     def _on_filters_changed(self, query: str, country: str, era: str,
-                             sort: str, favs_only: bool):
+                            sort: str, favs_only: bool):
         self._current_filters = (query, country, era, sort, favs_only)
         self._load_data()
 
