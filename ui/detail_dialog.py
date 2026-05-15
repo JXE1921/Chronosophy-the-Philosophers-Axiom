@@ -1,7 +1,7 @@
 """
 ui/detail_dialog.py — Full philosopher detail view (read-only modal).
 
-v7 changes:
+v8 changes:
 - Sized to fit a 14" laptop: caps at 85 % of the current screen height
 - Tighter banner / spacing so the whole dialog is more compact
 - Favourite buttons fire on pressed (light tap) not clicked (full press+release)

@@ -1,13 +1,9 @@
 """
-ui/main_window.py — Root application window for Chronosophy v7.
+ui/main_window.py — Root application window for Chronosophy v8.
 
-v7 additions:
-· Frameless window — custom title bar (⟁ icon + title + menus + window controls)
-    sits in the same row as the native minimize/maximize/close area, VS Code-style.
-    Windows resize is handled via nativeEvent(WM_NCHITTEST). macOS/Linux fall back
-    to manual mouse-drag. No extra dependencies — ctypes only (stdlib).
-· Timeline zoom persisted in QSettings so it survives restarts.
-· Timeline Reset View button (matches Graph / World Map).
+v8 additions:
+· Reset View button now also resets scroll position to the first philosopher
+· UI zoom (Ctrl + = / − / 0) is persisted across sessions in QSettings
 """
 
 import sys
@@ -75,8 +71,13 @@ class MainWindow(QMainWindow):
     def load_initial_data(self):
         self._load_data()
         self.stats_view.refresh()
-        # Restore timeline zoom from previous session
+        # Restore persisted UI state from the previous session
         if self._settings:
+            # UI scale (Ctrl+= / Ctrl+- / Ctrl+0)
+            saved_scale = self._settings.value("uiScale", type=float)
+            if saved_scale and 0.6 <= saved_scale <= 2.0:
+                self._set_ui_scale(saved_scale, persist=False)
+            # Timeline zoom level
             saved_zoom = self._settings.value("timelineZoom", type=float)
             if saved_zoom and saved_zoom > 0:
                 self.timeline_view.canvas.set_zoom(saved_zoom)
@@ -96,7 +97,8 @@ class MainWindow(QMainWindow):
             self._settings.setValue("windowMaximised",
                                     self.windowState() == Qt.WindowState.WindowMaximized)
             self._settings.setValue("windowFullscreen", self.isFullScreen())
-            # Persist current timeline zoom so next session opens at the same level
+            # Persist UI scale and timeline zoom so the next session opens identically
+            self._settings.setValue("uiScale", self._ui_scale)
             if hasattr(self, 'timeline_view'):
                 self._settings.setValue(
                     "timelineZoom", self.timeline_view.canvas.zoom()
@@ -132,8 +134,12 @@ class MainWindow(QMainWindow):
         sc_zoom_out.activated.connect(lambda: self._set_ui_scale(self._ui_scale - 0.1))
         sc_zoom_rst.activated.connect(lambda: self._set_ui_scale(1.0))
 
-    def _set_ui_scale(self, new_scale: float):
-        """Re-apply the entire stylesheet with a new font-size scale factor."""
+    def _set_ui_scale(self, new_scale: float, persist: bool = True):
+        """Re-apply the entire stylesheet with a new font-size scale factor.
+
+        `persist=False` is used when restoring the saved value at startup, to
+        avoid an unnecessary write back to QSettings.
+        """
         from styles import get_stylesheet
         self._ui_scale = max(0.6, min(2.0, new_scale))
         from PyQt6.QtWidgets import QApplication
@@ -143,6 +149,9 @@ class MainWindow(QMainWindow):
         f = app.font()
         f.setPointSizeF(max(7, 12 * self._ui_scale))
         app.setFont(f)
+        # Persist immediately so the value survives crashes too
+        if persist and self._settings:
+            self._settings.setValue("uiScale", self._ui_scale)
 
     # ── UI construction ──────────────────────────────────────────────────────
 
@@ -532,7 +541,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, str, str, str, bool)
     def _on_filters_changed(self, query: str, country: str, era: str,
-                                sort: str, favs_only: bool):
+                            sort: str, favs_only: bool):
         self._current_filters = (query, country, era, sort, favs_only)
         self._load_data()
 

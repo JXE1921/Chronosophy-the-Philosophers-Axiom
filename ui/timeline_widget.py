@@ -3,7 +3,7 @@ ui/timeline_widget.py — Chronological philosopher timeline.
 Custom-painted scrollable canvas with proportional year positioning,
 era bands, and clickable philosopher cards.
 
-v7 changes:
+v8 changes:
 - Ctrl + scroll wheel zooms the timeline horizontally (anchored at the cursor)
 - Plain scroll wheel pans horizontally (faster than dragging the scrollbar)
 - Middle-mouse drag also pans horizontally
@@ -417,7 +417,7 @@ class TimelineCanvas(QWidget):
                 if len(preview) > 180:
                     preview = preview[:177] + "…"
                 tip = (f"<b>{hovered_p.name}</b><br>"
-                        f"<i>{hovered_p.lifespan_label} · {hovered_p.birth_country}</i>")
+                       f"<i>{hovered_p.lifespan_label} · {hovered_p.birth_country}</i>")
                 if preview:
                     tip += f"<br><br>{preview}"
                 QToolTip.showText(self.mapToGlobal(pos), tip, self)
@@ -569,14 +569,22 @@ class TimelineView(QWidget):
         # Reset View button — matches the style used in Graph and World Map toolbars
         btn_reset = QPushButton("⤺  Reset View")
         btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_reset.setToolTip("Reset zoom to default level")
-        # Lambda captures self lazily — self.canvas exists by the time this fires
-        btn_reset.clicked.connect(
-            lambda: self.canvas.set_zoom(TimelineCanvas.DEFAULT_ZOOM)
-        )
+        btn_reset.setToolTip("Reset zoom and scroll back to the first philosopher")
+        btn_reset.clicked.connect(self._reset_view)
         layout.addWidget(btn_reset)
 
         return w
+
+    def _reset_view(self):
+        """Reset zoom to default AND scroll back to the first philosopher.
+
+        Philosophers are sorted by birth_year, so the earliest one is leftmost
+        on the canvas. Scrolling the horizontal bar to 0 (and vertical to 0)
+        puts the timeline back exactly where it was on first open.
+        """
+        self.canvas.set_zoom(TimelineCanvas.DEFAULT_ZOOM)
+        self.scroll.horizontalScrollBar().setValue(0)
+        self.scroll.verticalScrollBar().setValue(0)
 
     def set_philosophers(self, philosophers: list[Philosopher]):
         self.canvas.set_philosophers(philosophers)
