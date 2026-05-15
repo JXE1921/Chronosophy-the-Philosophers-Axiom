@@ -1,7 +1,7 @@
 """
-ui/main_window.py — Root application window for Chronosophy v8.
+ui/main_window.py — Root application window for Chronosophy v9.
 
-v8 additions:
+v9 additions:
 · Reset View button now also resets scroll position to the first philosopher
 · UI zoom (Ctrl + = / − / 0) is persisted across sessions in QSettings
 """
@@ -135,23 +135,92 @@ class MainWindow(QMainWindow):
         sc_zoom_rst.activated.connect(lambda: self._set_ui_scale(1.0))
 
     def _set_ui_scale(self, new_scale: float, persist: bool = True):
-        """Re-apply the entire stylesheet with a new font-size scale factor.
-
-        `persist=False` is used when restoring the saved value at startup, to
-        avoid an unnecessary write back to QSettings.
-        """
+        """Re-apply the entire stylesheet with a new font-size scale factor."""
         from styles import get_stylesheet
         self._ui_scale = max(0.6, min(2.0, new_scale))
         from PyQt6.QtWidgets import QApplication
         app = QApplication.instance()
         app.setStyleSheet(get_stylesheet(self._ui_scale))
-        # Also scale the base application font so widgets without explicit sizes follow
         f = app.font()
         f.setPointSizeF(max(7, 12 * self._ui_scale))
         app.setFont(f)
-        # Persist immediately so the value survives crashes too
+        # Re-apply every inline stylesheet that has hardcoded font sizes
+        # (inline styles have higher CSS specificity than the app stylesheet,
+        # so they must be regenerated separately on every scale change)
+        self._apply_scaled_styles(self._ui_scale)
         if persist and self._settings:
             self._settings.setValue("uiScale", self._ui_scale)
+
+    def _apply_scaled_styles(self, scale: float):
+        """Re-apply all inline widget stylesheets that contain explicit font sizes.
+
+        Called once at build time (scale=1.0) and again on every zoom change.
+        Without this, inline stylesheets on the sidebar list, labels and buttons
+        override the app-level QSS and ignore the scale factor entirely.
+        """
+        s = scale  # shorthand
+
+        def px(base: float) -> str:
+            return f"{max(7, round(base * s))}px"
+
+        # ── Sidebar title label ("PHILOSOPHERS") ─────────────────────────────
+        if hasattr(self, '_sidebar_title_lbl'):
+            self._sidebar_title_lbl.setStyleSheet(f"""
+                color: {TEXT_DIM};
+                font-size: {px(9)};
+                letter-spacing: 2px;
+                background: transparent;
+                border: none;
+            """)
+
+        # ── Philosopher count badge ───────────────────────────────────────────
+        if hasattr(self, 'count_lbl'):
+            self.count_lbl.setStyleSheet(f"""
+                color: {GOLD_DIM};
+                font-size: {px(10)};
+                background: transparent;
+                border: none;
+            """)
+
+        # ── Philosopher list — item font size must be set inline because the
+        #    widget's own stylesheet beats the app-level QListWidget::item rule
+        if hasattr(self, 'philosopher_list'):
+            self.philosopher_list.setStyleSheet(f"""
+                QListWidget {{
+                    background: {BG_SURFACE};
+                    border: none;
+                    border-radius: 0;
+                    padding: 4px;
+                }}
+                QListWidget::item {{
+                    padding: 10px 12px;
+                    border-radius: 6px;
+                    color: {TEXT_PRI};
+                    font-size: {px(13)};
+                    border: none;
+                    margin: 1px 0;
+                }}
+                QListWidget::item:selected {{
+                    background: {GOLD_DIM};
+                    color: {GOLD_LIGHT};
+                }}
+                QListWidget::item:hover:!selected {{ background: {BG_HOVER}; }}
+            """)
+
+        # ── Header: clock label ───────────────────────────────────────────────
+        if hasattr(self, 'clock_label'):
+            self.clock_label.setStyleSheet(f"""
+                color: {TEXT_SEC};
+                font-family: 'Georgia', serif;
+                font-size: {px(12)};
+                letter-spacing: 1px;
+                background: transparent;
+                border: 1px solid {BORDER};
+                border-radius: 5px;
+                padding: 2px 9px;
+            """)
+
+
 
     # ── UI construction ──────────────────────────────────────────────────────
 
@@ -387,36 +456,16 @@ class MainWindow(QMainWindow):
         title_bar.setStyleSheet(f"background: {BG_RAISED}; border-bottom: 1px solid {BORDER};")
         tb = QHBoxLayout(title_bar)
         tb.setContentsMargins(14, 0, 10, 0)
-        lbl = QLabel("PHILOSOPHERS")
-        lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9px; letter-spacing: 2px; background: transparent; border: none;")
-        tb.addWidget(lbl)
+
+        # Store as self so _apply_scaled_styles can update it on zoom change
+        self._sidebar_title_lbl = QLabel("PHILOSOPHERS")
+        tb.addWidget(self._sidebar_title_lbl)
         tb.addStretch()
         self.count_lbl = QLabel("0")
-        self.count_lbl.setStyleSheet(f"color: {GOLD_DIM}; font-size: 10px; background: transparent; border: none;")
         tb.addWidget(self.count_lbl)
         layout.addWidget(title_bar)
 
         self.philosopher_list = QListWidget()
-        self.philosopher_list.setStyleSheet(f"""
-            QListWidget {{
-                background: {BG_SURFACE};
-                border: none;
-                border-radius: 0;
-                padding: 4px;
-            }}
-            QListWidget::item {{
-                padding: 10px 12px;
-                border-radius: 6px;
-                color: {TEXT_PRI};
-                border: none;
-                margin: 1px 0;
-            }}
-            QListWidget::item:selected {{
-                background: {GOLD_DIM};
-                color: {GOLD_LIGHT};
-            }}
-            QListWidget::item:hover:!selected {{ background: {BG_HOVER}; }}
-        """)
         self.philosopher_list.setSelectionMode(
             QListWidget.SelectionMode.ExtendedSelection
         )
@@ -431,7 +480,6 @@ class MainWindow(QMainWindow):
         act_layout.setContentsMargins(10, 6, 10, 6)
         act_layout.setSpacing(6)
 
-        # Row 1: view / edit / delete
         row1 = QHBoxLayout()
         row1.setSpacing(6)
         self.btn_view = QPushButton("👁  View")
@@ -455,7 +503,6 @@ class MainWindow(QMainWindow):
         row1.addWidget(self.btn_delete)
         act_layout.addLayout(row1)
 
-        # Row 2: compare (enabled only when exactly 2 are selected)
         self.btn_compare = QPushButton("⇆  Compare")
         self.btn_compare.clicked.connect(self._on_compare)
         self.btn_compare.setEnabled(False)
@@ -463,6 +510,10 @@ class MainWindow(QMainWindow):
         act_layout.addWidget(self.btn_compare)
 
         layout.addWidget(actions)
+
+        # Apply the initial (scale=1.0) inline styles — also called on every zoom change
+        self._apply_scaled_styles(self._ui_scale)
+
         return sidebar
 
     def _build_tabs(self) -> QWidget:

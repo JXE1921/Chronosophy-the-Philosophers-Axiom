@@ -3,7 +3,7 @@ ui/timeline_widget.py — Chronological philosopher timeline.
 Custom-painted scrollable canvas with proportional year positioning,
 era bands, and clickable philosopher cards.
 
-v8 changes:
+v9 changes:
 - Ctrl + scroll wheel zooms the timeline horizontally (anchored at the cursor)
 - Plain scroll wheel pans horizontally (faster than dragging the scrollbar)
 - Middle-mouse drag also pans horizontally
@@ -417,7 +417,7 @@ class TimelineCanvas(QWidget):
                 if len(preview) > 180:
                     preview = preview[:177] + "…"
                 tip = (f"<b>{hovered_p.name}</b><br>"
-                       f"<i>{hovered_p.lifespan_label} · {hovered_p.birth_country}</i>")
+                        f"<i>{hovered_p.lifespan_label} · {hovered_p.birth_country}</i>")
                 if preview:
                     tip += f"<br><br>{preview}"
                 QToolTip.showText(self.mapToGlobal(pos), tip, self)
