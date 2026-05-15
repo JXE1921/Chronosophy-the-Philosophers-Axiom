@@ -1,33 +1,41 @@
 """
 ui/detail_dialog.py — Full philosopher detail view (read-only modal).
 Shows all data beautifully formatted with their quotes.
+
+v2 changes:
+- Each quote now has a heart toggle to mark as favourite
+- Optional "View in graph" button emits a signal so the parent can switch
+- to the influence-graph tab and centre on this philosopher
 """
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QWidget, QFrame
+    QScrollArea, QWidget, QFrame, QSizePolicy
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
-from database import Philosopher
+import database as db
+from database import Philosopher, Quote
 from styles import (
     GOLD, GOLD_LIGHT, GOLD_DIM, GOLD_MUTED, BG_BASE, BG_SURFACE, BG_RAISED,
-    BORDER, BORDER_LT, TEXT_PRI, TEXT_SEC, TEXT_DIM, ERA_COLORS
+    BORDER, BORDER_LT, TEXT_PRI, TEXT_SEC, TEXT_DIM, ERA_COLORS, FAVOURITE
 )
 
 
 class DetailDialog(QDialog):
     """Read-only detailed profile of a philosopher."""
 
+    show_in_graph = pyqtSignal(int)        # (philosopher_id)
+    favourite_toggled = pyqtSignal()       # parent should refresh stats / quote widget
+
     def __init__(self, philosopher: Philosopher, parent=None):
         super().__init__(parent)
         self.p = philosopher
         self.setWindowTitle(philosopher.name)
-        self.setMinimumWidth(580)
-        self.setMinimumHeight(700)
+        self.setMinimumWidth(620)
+        self.setMinimumHeight(720)
         self.setModal(True)
         self.setStyleSheet(f"QDialog {{ background: {BG_BASE}; }}")
-        # Inherit the app-wide icon so every dialog shows it in the title bar
         if parent and not parent.windowIcon().isNull():
             self.setWindowIcon(parent.windowIcon())
         self._build_ui()
@@ -95,7 +103,7 @@ class DetailDialog(QDialog):
 
         # Info row
         info_row = QHBoxLayout()
-        info_row.setSpacing(24)
+        info_row.setSpacing(10)
         if self.p.birth_city or self.p.birth_country:
             place = ", ".join(filter(None, [self.p.birth_city, self.p.birth_country]))
             info_row.addWidget(self._info_chip("📍  " + place))
@@ -122,25 +130,37 @@ class DetailDialog(QDialog):
         if self.p.quotes:
             b.addWidget(self._section_header(f"QUOTES  ({len(self.p.quotes)})"))
             for quote in self.p.quotes:
-                b.addWidget(self._quote_card(quote.text))
+                b.addWidget(self._quote_card(quote))
 
         b.addStretch()
         scroll.setWidget(body)
         root.addWidget(scroll, stretch=1)
 
-        # ── Close button bar
+        # ── Bottom button bar
         btn_bar = QWidget()
         btn_bar.setFixedHeight(56)
         btn_bar.setStyleSheet(f"background: {BG_SURFACE}; border-top: 1px solid {BORDER};")
         bb = QHBoxLayout(btn_bar)
         bb.setContentsMargins(24, 0, 24, 0)
+        bb.setSpacing(8)
+
+        btn_graph = QPushButton("🕸  Show in Graph")
+        btn_graph.setToolTip("Open the influence graph centred on this philosopher")
+        btn_graph.clicked.connect(self._on_show_in_graph)
+        bb.addWidget(btn_graph)
+
         bb.addStretch()
+
         btn_close = QPushButton("Close")
         btn_close.setObjectName("btn_primary")
         btn_close.setMinimumWidth(100)
         btn_close.clicked.connect(self.accept)
         bb.addWidget(btn_close)
         root.addWidget(btn_bar)
+
+    def _on_show_in_graph(self):
+        self.show_in_graph.emit(self.p.id)
+        self.accept()
 
     def _info_chip(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -169,20 +189,23 @@ class DetailDialog(QDialog):
         """)
         return lbl
 
-    def _quote_card(self, text: str) -> QWidget:
+    def _quote_card(self, quote: Quote) -> QWidget:
         card = QWidget()
         card.setStyleSheet(f"""
-            QWidget {{
+            QWidget#quotecard {{
                 background: {BG_SURFACE};
                 border-left: 3px solid {GOLD_DIM};
                 border-radius: 4px;
             }}
         """)
+        card.setObjectName("quotecard")
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(16, 12, 12, 12)
+        layout.setSpacing(10)
 
-        lbl = QLabel(f"\u201c{text}\u201d")
+        lbl = QLabel(f"\u201c{quote.text}\u201d")
         lbl.setWordWrap(True)
+        lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         lbl.setStyleSheet(f"""
             color: {TEXT_PRI};
             font-size: 13px;
@@ -191,5 +214,49 @@ class DetailDialog(QDialog):
             background: transparent;
             font-family: 'Georgia', serif;
         """)
-        layout.addWidget(lbl)
+        layout.addWidget(lbl, stretch=1)
+
+        # Favourite button
+        fav_btn = QPushButton()
+        fav_btn.setFixedSize(28, 28)
+        fav_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        def style(is_fav: bool):
+            fav_btn.setText("♥" if is_fav else "♡")
+            if is_fav:
+                fav_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: transparent;
+                        border: 1px solid {FAVOURITE};
+                        border-radius: 14px;
+                        color: {FAVOURITE};
+                        font-size: 14px;
+                    }}
+                    QPushButton:hover {{ background: rgba(224, 160, 80, 0.15); }}
+                """)
+                fav_btn.setToolTip("Remove from favourites")
+            else:
+                fav_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: transparent;
+                        border: 1px solid {BORDER_LT};
+                        border-radius: 14px;
+                        color: {TEXT_DIM};
+                        font-size: 14px;
+                    }}
+                    QPushButton:hover {{ border-color: {FAVOURITE}; color: {FAVOURITE}; }}
+                """)
+                fav_btn.setToolTip("Add to favourites")
+
+        style(quote.is_favourite)
+
+        def on_click():
+            new = db.toggle_quote_favourite(quote.id)
+            quote.is_favourite = new
+            style(new)
+            self.favourite_toggled.emit()
+
+        fav_btn.clicked.connect(on_click)
+        layout.addWidget(fav_btn, alignment=Qt.AlignmentFlag.AlignTop)
+
         return card

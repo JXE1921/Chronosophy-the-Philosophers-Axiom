@@ -1,6 +1,8 @@
-# Philosopher Timeline & Daily Wisdom System
+# Chronosophy — The Philosopher's Axiom  ·  v2
 
 A premium dark-themed desktop application for exploring the history of philosophy.
+Custom-painted views, a force-directed influence graph, a painted world map,
+quote favouriting, export, and a daily wisdom widget with smooth fade transitions.
 
 ---
 
@@ -12,46 +14,79 @@ A premium dark-themed desktop application for exploring the history of philosoph
 pip install PyQt6
 ```
 
-### 2. Run the application
+### 2. Run
 
 ```bash
 python main.py
 ```
 
 The database (`philosophers.db`) is created automatically on first run and seeded
-with 15 philosophers.
+with 15 philosophers. Existing v1 databases are migrated automatically — all your
+data is preserved.
 
 ---
 
-## Features
+## What's New in v2
 
 | Feature | Details |
 |---|---|
-| **Daily Quote** | Rotates once per day from all stored quotes; refresh button for instant new quote |
-| **Timeline View** | Horizontal scrollable canvas with proportional year positioning and era colour bands |
-| **Country View** | Card grid grouped by country with colour-coded sections |
-| **Search & Filter** | Live search by name, filter by country or era, sort by lifespan or name |
-| **CRUD** | Add, edit, delete philosophers with multiple quotes per philosopher |
-| **Persistence** | SQLite database survives between sessions |
+| **Influence Graph** | Force-directed node graph of teacher → student links. Drag nodes, zoom, re-layout. |
+| **World Map** | Custom-painted stylised world map. Dots per country; click a dot to filter. |
+| **Statistics tab** | Summary tiles, era & country bar charts, top-quoted list. |
+| **Timeline zoom** | `Ctrl + Scroll` to zoom the timeline; `+/−` buttons and a log-scale slider in the legend bar. |
+| **Timeline tooltips** | Hover a philosopher bar to see a contribution preview. |
+| **Animated quotes** | "New Quote" now fades the panel out → in (wired `QPropertyAnimation`). |
+| **Quote favourites** | Heart (♥) button on the daily widget and each quote card. |
+| **Favourites filter** | Search bar checkbox to show only philosophers with favourited quotes. |
+| **Comparison dialog** | Select any two philosophers in the sidebar → click Compare. |
+| **"Show in Graph"** | Button in the detail view switches to the graph tab and centres the node. |
+| **Menu bar** | File → Export CSV / JSON, View → Fullscreen / tabs, Help → Shortcuts / About. |
+| **Export** | CSV and JSON export via File menu (`Ctrl+E`). |
+| **Keyboard shortcuts** | Full reference in Help → Keyboard Shortcuts. |
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl + N` | Add philosopher |
+| `Ctrl + F` | Focus search bar |
+| `Ctrl + E` | Export to CSV |
+| `Ctrl + 1 – 5` | Switch tab (Timeline / Country / Graph / Map / Stats) |
+| `Ctrl + Scroll` | Zoom timeline |
+| `F11` | Toggle fullscreen |
+| `Delete` | Delete selected philosopher |
+| `Double-click` | Open detail view |
 
 ---
 
 ## Project Structure
 
 ```
-philosopher_timeline/
-├── main.py                  # Entry point
-├── database.py              # All SQLite logic + data classes
-├── styles.py                # Dark theme colour tokens + QSS stylesheet
+chronosophy/
+├── main.py                      # Entry point
+├── database.py                  # SQLite layer + data classes
+├── styles.py                    # Colour tokens + QSS stylesheet
 ├── requirements.txt
-└── ui/
-    ├── main_window.py       # Root window — orchestrates all views
-    ├── quote_widget.py      # Daily wisdom panel (custom painted)
-    ├── timeline_widget.py   # Chronological canvas (custom painted)
-    ├── country_widget.py    # Country card view
-    ├── search_bar.py        # Filter / sort toolbar
-    ├── philosopher_form.py  # Add / Edit dialog
-    └── detail_dialog.py     # Read-only detail view
+├── README.md
+├── philosophers.db              # Created / migrated on first run
+├── ui/
+│   ├── main_window.py           # Root window — orchestrates everything
+│   ├── quote_widget.py          # Daily wisdom panel (fade animation + favouriting)
+│   ├── timeline_widget.py       # Chronological canvas (zoom / pan / tooltips)
+│   ├── country_widget.py        # Country card grid
+│   ├── influence_graph.py       # Force-directed teacher → student graph
+│   ├── world_map.py             # Custom-painted world map (no browser dependency)
+│   ├── statistics_view.py       # Aggregate insights tab
+│   ├── search_bar.py            # Filter / sort / favourites toolbar
+│   ├── philosopher_form.py      # Add / Edit dialog
+│   ├── detail_dialog.py         # Read-only detail view (with Show in Graph)
+│   ├── comparison_dialog.py     # Side-by-side comparison modal
+│   ├── about_dialog.py          # About modal
+│   └── shortcuts_dialog.py      # Keyboard shortcuts reference
+└── services/
+    └── export.py                # CSV and JSON export logic
 ```
 
 ---
@@ -62,38 +97,32 @@ philosopher_timeline/
 philosophers  (id, name, birth_year, death_year, birth_city, birth_country,
                teachers, contributions)
 
-quotes        (id, philosopher_id FK, text)
+quotes        (id, philosopher_id FK, text, is_favourite)  -- v2: is_favourite added
 
-daily_quote   (id=1, quote_id, selected_on)   -- singleton row
+daily_quote   (id=1, quote_id, selected_on)                -- singleton row
+
+teacher_links (id, student_id FK, teacher_id FK)           -- v2: parsed from teachers field
 ```
-
----
-
-## Keyboard Shortcuts
-
-| Action | Shortcut |
-|---|---|
-| Add philosopher | Click **＋ Add Philosopher** button |
-| View details | Double-click sidebar item or click timeline/card |
-| Edit | Select item → click **✏ Edit** |
-| Delete | Select item → click **✕** |
-
----
-
-## Extending the App
-
-- **New fields** — add columns to `philosophers` table in `database.py`, update
-  `Philosopher` dataclass, and add inputs in `philosopher_form.py`
-- **New views** — add a new widget in `ui/`, import in `main_window.py`, and add
-  a tab in `_build_tabs()`
-- **Map view** — install `folium` or `plotly` and render into a `QWebEngineView`
-  replacing the country cards
-- **Export** — add a menu bar with CSV/PDF export in `main_window.py`
 
 ---
 
 ## Dependencies
 
-- **PyQt6** — GUI framework (LGPL licensed)
-- **sqlite3** — standard library, no install needed
-- Python 3.10+ required (uses `int | None` union syntax)
+- **PyQt6** — GUI framework (LGPL)
+- **sqlite3** — standard library
+- Python 3.10+ required (`int | None` union type syntax)
+
+No external mapping libraries, no browser widget — the world map is rendered
+entirely with `QPainter`.
+
+---
+
+## Extending
+
+- **New philosopher fields** — add a column to `philosophers`, update the `Philosopher`
+  dataclass, and add an input in `philosopher_form.py`
+- **More teaching links** — populate the `teachers` field with comma-separated names
+  that match existing philosopher names; `_rebuild_teacher_links()` runs on startup
+- **New views** — add a widget in `ui/`, import in `main_window.py`, and add a tab
+- **Map countries** — add entries to `COUNTRY_COORDS` in `world_map.py` as
+  `"Country Name": (lat, lng)`

@@ -31,11 +31,11 @@ ERA_COLORS = {
     "Pre-Socratic":        "#5E4A7E",   # dusty violet
     "Classical":           "#7E5A3C",   # warm terracotta
     "Hellenistic / Roman": "#3C6B5E",   # sea-green
-    "Medieval":            "#4E5E7E",   # slate blue
-    "Renaissance":         "#6B4E3C",   # sienna
-    "Early Modern":        "#3C6B6B",   # teal slate
-    "Modern":              "#5E6B3C",   # olive
-    "Contemporary":        "#4E4E7E",   # indigo
+    "Medieval":             "#4E5E7E",   # slate blue
+    "Renaissance":          "#6B4E3C",   # sienna
+    "Early Modern":         "#3C6B6B",   # teal slate
+    "Modern":               "#5E6B3C",   # olive
+    "Contemporary":         "#4E4E7E",   # indigo
 }
 
 # Country badge colors (muted)
@@ -44,6 +44,23 @@ COUNTRY_COLORS = [
     "#6B4E3C", "#5E6B3C", "#3C5E6B", "#7E3C5E",
     "#3C7E6B", "#5E3C7E", "#6B5E3C", "#3C4E7E",
 ]
+
+# ─── v2 additions ─────────────────────────────────────────────────────────────
+# Graph view tokens
+GRAPH_NODE_FILL      = "#22222E"
+GRAPH_NODE_HOVER     = "#3A3A50"
+GRAPH_EDGE           = "#3A3A50"
+GRAPH_EDGE_HIGHLIGHT = "#C9A84C"
+
+# World map tokens
+MAP_LAND        = "#1E1E2A"
+MAP_LAND_BORDER = "#2E2E40"
+MAP_OCEAN       = "#0C0C0E"
+MAP_DOT         = "#C9A84C"
+MAP_DOT_HOVER   = "#DFC073"
+
+# Favourite (heart/star) accent
+FAVOURITE       = "#E0A050"
 
 
 # ─── Main QSS stylesheet ──────────────────────────────────────────────────────
@@ -103,7 +120,7 @@ def get_stylesheet() -> str:
     QTabBar::tab {{
         background: {BG_RAISED};
         color: {TEXT_SEC};
-        padding: 10px 28px;
+        padding: 10px 22px;
         margin-right: 2px;
         border: 1px solid {BORDER};
         border-bottom: none;
@@ -134,6 +151,11 @@ def get_stylesheet() -> str:
         color: {TEXT_PRI};
     }}
     QPushButton:pressed {{ background-color: {GOLD_MUTED}; border-color: {GOLD_DIM}; }}
+    QPushButton:disabled {{
+        background-color: {BG_BASE};
+        color: {TEXT_DIM};
+        border-color: {BORDER};
+    }}
 
     QPushButton#btn_primary {{
         background-color: {GOLD_DIM};
@@ -256,9 +278,67 @@ def get_stylesheet() -> str:
         font-size: 12px;
     }}
 
+    /* ── Menu bar ───────────────────────────────────────────────── */
+    QMenuBar {{
+        background-color: {BG_DEEP};
+        color: {TEXT_SEC};
+        border-bottom: 1px solid {BORDER};
+        padding: 2px 8px;
+        font-size: 12px;
+    }}
+    QMenuBar::item {{
+        background-color: transparent;
+        padding: 6px 12px;
+        border-radius: 4px;
+    }}
+    QMenuBar::item:selected {{
+        background-color: {BG_RAISED};
+        color: {GOLD};
+    }}
+    QMenu {{
+        background-color: {BG_SURFACE};
+        border: 1px solid {BORDER_LT};
+        padding: 4px;
+        font-size: 12px;
+    }}
+    QMenu::item {{
+        padding: 7px 24px 7px 16px;
+        border-radius: 4px;
+        color: {TEXT_PRI};
+    }}
+    QMenu::item:selected {{
+        background-color: {GOLD_DIM};
+        color: {GOLD_LIGHT};
+    }}
+    QMenu::item:disabled {{ color: {TEXT_DIM}; }}
+    QMenu::separator {{
+        height: 1px;
+        background: {BORDER};
+        margin: 4px 8px;
+    }}
+
     /* ── Message boxes ──────────────────────────────────────────── */
     QMessageBox {{
         background-color: {BG_SURFACE};
     }}
     QMessageBox QLabel {{ color: {TEXT_PRI}; font-size: 14px; }}
+
+    /* ── CheckBox ───────────────────────────────────────────────── */
+    QCheckBox {{
+        color: {TEXT_PRI};
+        font-size: 12px;
+        spacing: 8px;
+    }}
+    QCheckBox::indicator {{
+        width: 14px;
+        height: 14px;
+        border: 1px solid {BORDER_LT};
+        border-radius: 3px;
+        background: {BG_RAISED};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {GOLD_DIM};
+        border-color: {GOLD};
+    }}
+    QCheckBox::indicator:hover {{ border-color: {GOLD_DIM}; }}
     """
