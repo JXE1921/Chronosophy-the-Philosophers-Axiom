@@ -3,7 +3,7 @@ ui/timeline_widget.py — Chronological philosopher timeline.
 Custom-painted scrollable canvas with proportional year positioning,
 era bands, and clickable philosopher cards.
 
-v2 changes:
+v3 changes:
 - Ctrl + scroll wheel zooms the timeline horizontally (anchored at the cursor)
 - Plain scroll wheel pans horizontally (faster than dragging the scrollbar)
 - Middle-mouse drag also pans horizontally
@@ -14,7 +14,7 @@ v2 changes:
 
 from PyQt6.QtWidgets import (
     QWidget, QScrollArea, QVBoxLayout, QHBoxLayout, QLabel,
-    QSizePolicy, QToolTip, QSlider, QPushButton
+    QSizePolicy, QToolTip
 )
 from PyQt6.QtCore import Qt, QRect, QPoint, pyqtSignal, QSize
 from PyQt6.QtGui import (
@@ -173,7 +173,7 @@ class TimelineCanvas(QWidget):
         painter.setPen(QColor(TEXT_DIM))
         painter.setFont(QFont("Georgia", 14, QFont.Weight.Normal, True))
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                         "No philosophers to display.\nAdd some using the + button.")
+                        "No philosophers to display.\nAdd some using the + button.")
         painter.end()
 
     def _paint_era_bands(self, painter: QPainter, canvas_height: int):
@@ -203,7 +203,7 @@ class TimelineCanvas(QWidget):
                 painter.setFont(QFont("Georgia", 9, QFont.Weight.Normal, True))
                 mid_x = (x1 + x2) // 2
                 painter.drawText(mid_x - 60, HEADER_HEIGHT + 16, 120, 20,
-                                 Qt.AlignmentFlag.AlignCenter, era)
+                                Qt.AlignmentFlag.AlignCenter, era)
 
     def _paint_axis(self, painter: QPainter, canvas_width: int):
         """Draw the central timeline axis line."""
@@ -313,14 +313,14 @@ class TimelineCanvas(QWidget):
             text_x = x1 + 10
             text_w = bar_w - 20
             painter.drawText(text_x, lane_y, text_w, BAR_H // 2 + 4,
-                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                             p.name)
+                            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                            p.name)
 
             painter.setFont(QFont("Georgia", 8, QFont.Weight.Normal, True))
             painter.setPen(QColor(TEXT_SEC))
             painter.drawText(text_x, lane_y + BAR_H // 2 - 2, text_w, BAR_H // 2 + 2,
-                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                             p.lifespan_label)
+                            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                            p.lifespan_label)
 
             # Country chip
             if p.birth_country:
@@ -332,8 +332,8 @@ class TimelineCanvas(QWidget):
                 if cx > x1 + bar_w // 2:
                     painter.setPen(QColor(TEXT_DIM))
                     painter.drawText(cx, lane_y + 4, cw, BAR_H - 8,
-                                     Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                                     country_text)
+                                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                                    country_text)
 
             self._hit_rects.append((QRect(x1, lane_y, bar_w, BAR_H), p.id))
 
@@ -402,7 +402,7 @@ class TimelineCanvas(QWidget):
             self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def wheelEvent(self, event):
-        # Ctrl + wheel = zoom; plain wheel = horizontal pan
+        # Ctrl + wheel = zoom; plain wheel = horizontal pan (two-finger swipe)
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             delta = event.angleDelta().y()
             factor = 1.15 if delta > 0 else 1 / 1.15
@@ -411,7 +411,7 @@ class TimelineCanvas(QWidget):
             event.accept()
             return
 
-        # Forward to horizontal scroll bar
+        # Forward to horizontal scroll bar for two-finger swipe panning
         scroll = self._find_scroll_area()
         if scroll:
             delta = event.angleDelta().y()
@@ -420,6 +420,24 @@ class TimelineCanvas(QWidget):
             event.accept()
             return
         super().wheelEvent(event)
+
+    def event(self, ev):
+        """Handle native trackpad pinch-to-zoom gesture."""
+        from PyQt6.QtCore import QEvent
+        if ev.type() == QEvent.Type.NativeGesture:
+            try:
+                from PyQt6.QtGui import QNativeGestureEvent
+                if isinstance(ev, QNativeGestureEvent):
+                    from PyQt6.QtCore import Qt as _Qt
+                    if ev.gestureType() == _Qt.NativeGestureType.ZoomNativeGesture:
+                        factor = 1.0 + ev.value()
+                        anchor_x = int(ev.position().x())
+                        self.set_zoom(self._pixels_per_year * factor, anchor_x=anchor_x)
+                        ev.accept()
+                        return True
+            except Exception:
+                pass
+        return super().event(ev)
 
     def leaveEvent(self, event):
         self._hover_id = -1
@@ -454,21 +472,22 @@ class TimelineView(QWidget):
 
         self.canvas = TimelineCanvas()
         self.canvas.philosopher_clicked.connect(self.philosopher_clicked)
-        self.canvas.zoom_changed.connect(self._sync_zoom_slider)
         self.scroll.setWidget(self.canvas)
 
         layout.addWidget(self.scroll, stretch=1)
 
     def _build_legend(self) -> QWidget:
         w = QWidget()
-        w.setFixedHeight(40)
+        w.setFixedHeight(36)
         w.setStyleSheet(f"background: {BG_SURFACE}; border-bottom: 1px solid {BORDER};")
         layout = QHBoxLayout(w)
         layout.setContentsMargins(16, 0, 16, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(12)
 
         title = QLabel("ERA KEY")
-        title.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9px; letter-spacing: 2px; background: transparent;")
+        title.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 9px; letter-spacing: 2px; background: transparent;"
+        )
         layout.addWidget(title)
 
         for era, color in ERA_COLORS.items():
@@ -481,108 +500,14 @@ class TimelineView(QWidget):
 
         layout.addStretch()
 
-        # ── Zoom controls ──────────────────────────────────────────────────
-        zoom_lbl = QLabel("ZOOM")
-        zoom_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9px; letter-spacing: 2px; background: transparent;")
-        layout.addWidget(zoom_lbl)
-
-        btn_zoom_out = QPushButton("−")
-        btn_zoom_out.setFixedSize(22, 22)
-        btn_zoom_out.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_zoom_out.setStyleSheet(self._zoom_btn_qss())
-        btn_zoom_out.clicked.connect(lambda: self.canvas.set_zoom(self.canvas.zoom() / 1.3))
-        layout.addWidget(btn_zoom_out)
-
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setFixedWidth(140)
-        # Map 0.5..24 to 0..100 logarithmically for intuitive feel
-        self.zoom_slider.setRange(0, 100)
-        self.zoom_slider.setValue(self._zoom_to_slider(TimelineCanvas.DEFAULT_ZOOM))
-        self.zoom_slider.setStyleSheet(self._slider_qss())
-        self.zoom_slider.valueChanged.connect(
-            lambda v: self.canvas.set_zoom(self._slider_to_zoom(v))
+        # Gesture hint — right-aligned, very subtle
+        hint = QLabel("Pinch or Ctrl + scroll to zoom  ·  Two-finger swipe to pan")
+        hint.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 9px; font-style: italic; background: transparent;"
         )
-        layout.addWidget(self.zoom_slider)
-
-        btn_zoom_in = QPushButton("+")
-        btn_zoom_in.setFixedSize(22, 22)
-        btn_zoom_in.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_zoom_in.setStyleSheet(self._zoom_btn_qss())
-        btn_zoom_in.clicked.connect(lambda: self.canvas.set_zoom(self.canvas.zoom() * 1.3))
-        layout.addWidget(btn_zoom_in)
-
-        btn_fit = QPushButton("Fit")
-        btn_fit.setFixedHeight(22)
-        btn_fit.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_fit.setStyleSheet(self._zoom_btn_qss() + " QPushButton { padding: 0 8px; font-size: 10px; }")
-        btn_fit.clicked.connect(self._fit_to_view)
-        btn_fit.setToolTip("Fit timeline to current viewport width")
-        layout.addWidget(btn_fit)
+        layout.addWidget(hint)
 
         return w
-
-    def _zoom_btn_qss(self) -> str:
-        return f"""
-            QPushButton {{
-                background: {BG_RAISED};
-                border: 1px solid {BORDER};
-                border-radius: 4px;
-                color: {TEXT_SEC};
-                font-size: 13px;
-                font-weight: bold;
-                padding: 0;
-            }}
-            QPushButton:hover {{ background: {BG_HOVER}; color: {GOLD}; border-color: {GOLD_DIM}; }}
-        """
-
-    def _slider_qss(self) -> str:
-        return f"""
-            QSlider::groove:horizontal {{
-                background: {BG_RAISED};
-                height: 4px;
-                border-radius: 2px;
-            }}
-            QSlider::handle:horizontal {{
-                background: {GOLD};
-                width: 12px;
-                height: 12px;
-                margin: -4px 0;
-                border-radius: 6px;
-            }}
-            QSlider::handle:horizontal:hover {{ background: {GOLD_LIGHT}; }}
-            QSlider::sub-page:horizontal {{ background: {GOLD_DIM}; border-radius: 2px; }}
-        """
-
-    @staticmethod
-    def _zoom_to_slider(z: float) -> int:
-        import math
-        z = max(TimelineCanvas.MIN_ZOOM, min(TimelineCanvas.MAX_ZOOM, z))
-        # log-scale
-        rng = math.log(TimelineCanvas.MAX_ZOOM / TimelineCanvas.MIN_ZOOM)
-        return int(round(math.log(z / TimelineCanvas.MIN_ZOOM) / rng * 100))
-
-    @staticmethod
-    def _slider_to_zoom(v: int) -> float:
-        import math
-        rng = math.log(TimelineCanvas.MAX_ZOOM / TimelineCanvas.MIN_ZOOM)
-        return TimelineCanvas.MIN_ZOOM * math.exp(v / 100 * rng)
-
-    def _sync_zoom_slider(self, zoom: float):
-        self.zoom_slider.blockSignals(True)
-        self.zoom_slider.setValue(self._zoom_to_slider(zoom))
-        self.zoom_slider.blockSignals(False)
-
-    def _fit_to_view(self):
-        """Zoom such that the entire timeline fits the viewport width."""
-        if not self.canvas.philosophers:
-            return
-        viewport_w = self.scroll.viewport().width()
-        span = self.canvas._max_year - self.canvas._min_year
-        if span <= 0:
-            return
-        # We want span * pixels_per_year + 2*YEAR_PADDING ~= viewport_w
-        target = max(0.1, (viewport_w - 2 * YEAR_PADDING) / span)
-        self.canvas.set_zoom(target)
 
     def set_philosophers(self, philosophers: list[Philosopher]):
         self.canvas.set_philosophers(philosophers)

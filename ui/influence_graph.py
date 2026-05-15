@@ -183,7 +183,7 @@ class InfluenceGraphCanvas(QWidget):
 
     def _from_screen(self, sx: float, sy: float) -> QPointF:
         return QPointF((sx - self._pan_offset.x()) / self._zoom,
-                        (sy - self._pan_offset.y()) / self._zoom)
+                    (sy - self._pan_offset.y()) / self._zoom)
 
     # ── Painting ─────────────────────────────────────────────────────────────
 
@@ -438,7 +438,7 @@ class InfluenceGraphView(QWidget):
         self.canvas.set_data(philosophers, edges)
         n_nodes = len(philosophers)
         n_edges = sum(1 for s, t in edges if any(p.id == s for p in philosophers)
-                        and any(p.id == t for p in philosophers))
+                    and any(p.id == t for p in philosophers))
         self.lbl_count.setText(f"{n_nodes} philosophers · {n_edges} teaching links")
 
     def centre_on(self, philosopher_id: int):

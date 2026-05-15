@@ -58,7 +58,7 @@ class AboutDialog(QDialog):
         logo_row.addStretch()
         bl.addLayout(logo_row)
 
-        subtitle = QLabel("The Philosopher's Axiom  ·  v2.0")
+        subtitle = QLabel("The Philosopher's Axiom  ·  v3.0")
         subtitle.setStyleSheet(f"""
             color: {TEXT_SEC};
             font-family: 'Georgia', serif;

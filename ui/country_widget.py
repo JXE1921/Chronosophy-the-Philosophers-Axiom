@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel,
     QFrame, QSizePolicy, QPushButton, QGridLayout
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QObject
 from PyQt6.QtGui import QColor, QPainter, QLinearGradient, QBrush, QPen, QPainterPath
 from database import Philosopher
 from styles import (
@@ -217,6 +217,9 @@ class CountryView(QWidget):
         self.scroll.setStyleSheet(f"""
             QScrollArea {{ background: {BG_BASE}; border: none; }}
         """)
+        # Enable horizontal scroll so two-finger left/right swipe works
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self.scroll)
 
         self.container = QWidget()
@@ -226,6 +229,28 @@ class CountryView(QWidget):
         self.container_layout.setSpacing(28)
 
         self.scroll.setWidget(self.container)
+        # Install event filter on viewport to catch native gestures
+        self.scroll.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        """Catch pinch-to-zoom and two-finger pan on the scroll viewport."""
+        from PyQt6.QtCore import QEvent
+        if ev.type() == QEvent.Type.NativeGesture:
+            try:
+                from PyQt6.QtGui import QNativeGestureEvent
+                from PyQt6.QtCore import Qt as _Qt
+                if isinstance(ev, QNativeGestureEvent):
+                    if ev.gestureType() == _Qt.NativeGestureType.ZoomNativeGesture:
+                        # Scale card sizes by adjusting the container margin as a proxy
+                        # (simple: just scroll vertically proportionally)
+                        factor = 1.0 + ev.value()
+                        bar = self.scroll.verticalScrollBar()
+                        bar.setValue(int(bar.value() / factor))
+                        ev.accept()
+                        return True
+            except Exception:
+                pass
+        return super().eventFilter(obj, ev)
 
     def set_philosophers(self, philosophers: list[Philosopher]):
         # Clear old content

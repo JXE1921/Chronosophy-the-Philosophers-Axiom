@@ -40,6 +40,9 @@ _SHORTCUTS = [
         ("Click (node)", "Open detail view"),
     ]),
     ("General", [
+        ("Ctrl + =  /  Ctrl + +", "Zoom UI in"),
+        ("Ctrl + -", "Zoom UI out"),
+        ("Ctrl + 0", "Reset UI zoom"),
         ("Ctrl + E", "Export to CSV"),
         ("F11", "Toggle fullscreen"),
         ("Ctrl + Q", "Quit"),

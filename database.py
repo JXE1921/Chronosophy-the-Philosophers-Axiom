@@ -3,7 +3,7 @@ database.py — SQLite data layer for Chronosophy.
 Handles all persistence: CRUD for philosophers, quotes, favourites, daily quote,
 teacher relationship graph, and aggregate statistics.
 
-v2 additions:
+v3 additions:
 - quotes.is_favourite column (with migration for existing databases)
 - teacher_links table for normalised many-to-many relationships
 - get_random_quote (used by the New Quote button — no more raw SQL in UI)
@@ -102,7 +102,7 @@ def initialise_db() -> None:
             CREATE TABLE IF NOT EXISTS quotes (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
                 philosopher_id   INTEGER NOT NULL
-                REFERENCES philosophers(id) ON DELETE CASCADE,
+                                    REFERENCES philosophers(id) ON DELETE CASCADE,
                 text             TEXT    NOT NULL
             );
 
@@ -112,7 +112,7 @@ def initialise_db() -> None:
                 selected_on      TEXT    NOT NULL       -- ISO date string
             );
 
-            -- v2: normalised teacher graph
+            -- v3: normalised teacher graph
             CREATE TABLE IF NOT EXISTS teacher_links (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id  INTEGER NOT NULL REFERENCES philosophers(id) ON DELETE CASCADE,
@@ -205,7 +205,7 @@ def add_philosopher(p: Philosopher, quote_texts: list[str]) -> int:
                 (name, birth_year, death_year, birth_city, birth_country, teachers, contributions)
                 VALUES (?,?,?,?,?,?,?)""",
             (p.name, p.birth_year, p.death_year,
-                p.birth_city, p.birth_country, p.teachers, p.contributions)
+            p.birth_city, p.birth_country, p.teachers, p.contributions)
         )
         pid = cur.lastrowid
         for text in quote_texts:
@@ -233,7 +233,7 @@ def update_philosopher(p: Philosopher, quote_texts: list[str]) -> None:
                 birth_country=?, teachers=?, contributions=?
                 WHERE id=?""",
             (p.name, p.birth_year, p.death_year, p.birth_city,
-                p.birth_country, p.teachers, p.contributions, p.id)
+            p.birth_country, p.teachers, p.contributions, p.id)
         )
         conn.execute("DELETE FROM quotes WHERE philosopher_id=?", (p.id,))
         for text in quote_texts:
@@ -320,7 +320,7 @@ def get_daily_quote() -> Optional[tuple[str, str]]:
             """INSERT INTO daily_quote (id, quote_id, selected_on)
                 VALUES (1, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET quote_id=excluded.quote_id,
-                selected_on=excluded.selected_on""",
+                                            selected_on=excluded.selected_on""",
             (chosen["id"], today)
         )
         return chosen["text"], chosen["name"]
@@ -359,9 +359,9 @@ def get_favourite_quotes() -> list[tuple[int, str, str, int]]:
     with _connect() as conn:
         rows = conn.execute(
             """SELECT q.id, q.text, p.name, p.id AS pid FROM quotes q
-                JOIN philosophers p ON p.id = q.philosopher_id
-                WHERE q.is_favourite=1
-                ORDER BY p.name"""
+            JOIN philosophers p ON p.id = q.philosopher_id
+            WHERE q.is_favourite=1
+            ORDER BY p.name"""
         ).fetchall()
         return [(r["id"], r["text"], r["name"], r["pid"]) for r in rows]
 
@@ -387,10 +387,10 @@ def get_statistics() -> dict:
 
         countries = conn.execute(
             """SELECT birth_country AS country, COUNT(*) AS n
-                FROM philosophers
-                WHERE birth_country != ''
-                GROUP BY birth_country
-                ORDER BY n DESC, birth_country"""
+            FROM philosophers
+            WHERE birth_country != ''
+            GROUP BY birth_country
+            ORDER BY n DESC, birth_country"""
         ).fetchall()
         country_counts = [(r["country"], r["n"]) for r in countries]
 
@@ -402,10 +402,10 @@ def get_statistics() -> dict:
         # Most-quoted (philosophers with most quotes)
         top_quoted = conn.execute(
             """SELECT p.name, COUNT(q.id) AS n
-                FROM philosophers p LEFT JOIN quotes q ON q.philosopher_id = p.id
-                GROUP BY p.id
-                ORDER BY n DESC, p.name
-                LIMIT 5"""
+            FROM philosophers p LEFT JOIN quotes q ON q.philosopher_id = p.id
+            GROUP BY p.id
+            ORDER BY n DESC, p.name
+            LIMIT 5"""
         ).fetchall()
         top_quoted = [(r["name"], r["n"]) for r in top_quoted]
 
@@ -429,7 +429,7 @@ def _get_quotes_for(conn: sqlite3.Connection, pid: int) -> list[Quote]:
     ).fetchall()
     return [
         Quote(id=r["id"], philosopher_id=r["philosopher_id"],
-                text=r["text"], is_favourite=bool(r["is_favourite"]))
+            text=r["text"], is_favourite=bool(r["is_favourite"]))
         for r in rows
     ]
 

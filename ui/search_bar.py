@@ -1,8 +1,7 @@
 """
 ui/search_bar.py — Search, filter, and sort controls.
 Emits a signal whenever the user changes any filter so the parent can reload data.
-
-v2 changes:
+v3 changes:
 - Favourites-only checkbox
 - "By Country" sort option
 - Signal now carries a 5th arg: favourites_only (bool)

@@ -45,7 +45,7 @@ COUNTRY_COLORS = [
     "#3C7E6B", "#5E3C7E", "#6B5E3C", "#3C4E7E",
 ]
 
-# ─── v2 additions ─────────────────────────────────────────────────────────────
+# ─── v3 additions ─────────────────────────────────────────────────────────────
 # Graph view tokens
 GRAPH_NODE_FILL      = "#22222E"
 GRAPH_NODE_HOVER     = "#3A3A50"
@@ -64,7 +64,13 @@ FAVOURITE       = "#E0A050"
 
 
 # ─── Main QSS stylesheet ──────────────────────────────────────────────────────
-def get_stylesheet() -> str:
+def get_stylesheet(scale: float = 1.0) -> str:
+    """Return the full QSS stylesheet. `scale` multiplies all explicit font
+    sizes so Ctrl+= / Ctrl+- can zoom the entire UI without rebuilding widgets."""
+
+    def px(base: int) -> str:
+        return f"{max(7, round(base * scale))}px"
+
     return f"""
     /* ── Global ────────────────────────────────────────────────── */
     * {{
@@ -125,7 +131,7 @@ def get_stylesheet() -> str:
         border: 1px solid {BORDER};
         border-bottom: none;
         border-radius: 6px 6px 0 0;
-        font-size: 13px;
+        font-size: {px(13)};
         letter-spacing: 0.5px;
     }}
     QTabBar::tab:selected {{
@@ -142,7 +148,7 @@ def get_stylesheet() -> str:
         border: 1px solid {BORDER};
         border-radius: 6px;
         padding: 8px 18px;
-        font-size: 13px;
+        font-size: {px(13)};
         font-family: "Georgia", serif;
     }}
     QPushButton:hover {{
@@ -181,7 +187,7 @@ def get_stylesheet() -> str:
         border: 1px solid {BORDER};
         border-radius: 6px;
         padding: 8px 10px;
-        font-size: 13px;
+        font-size: {px(13)};
         color: {TEXT_PRI};
         selection-background-color: {GOLD_DIM};
     }}
@@ -197,7 +203,7 @@ def get_stylesheet() -> str:
         border: 1px solid {BORDER};
         border-radius: 6px;
         padding: 8px 10px;
-        font-size: 13px;
+        font-size: {px(13)};
         color: {TEXT_PRI};
         min-width: 120px;
     }}
@@ -216,7 +222,7 @@ def get_stylesheet() -> str:
         border: 1px solid {BORDER};
         border-radius: 6px;
         padding: 8px 10px;
-        font-size: 13px;
+        font-size: {px(13)};
         color: {TEXT_PRI};
     }}
     QSpinBox:focus {{ border-color: {GOLD_DIM}; }}
@@ -225,17 +231,17 @@ def get_stylesheet() -> str:
     /* ── Labels ─────────────────────────────────────────────────── */
     QLabel {{ background: transparent; }}
     QLabel#heading {{
-        font-size: 22px;
+        font-size: {px(22)};
         color: {GOLD_LIGHT};
         font-family: "Georgia", serif;
     }}
     QLabel#subheading {{
-        font-size: 15px;
+        font-size: {px(15)};
         color: {TEXT_SEC};
         font-style: italic;
     }}
     QLabel#field_label {{
-        font-size: 12px;
+        font-size: {px(12)};
         color: {TEXT_SEC};
         text-transform: uppercase;
         letter-spacing: 1px;
@@ -275,7 +281,7 @@ def get_stylesheet() -> str:
         border: 1px solid {BORDER_LT};
         padding: 6px 10px;
         border-radius: 6px;
-        font-size: 12px;
+        font-size: {px(12)};
     }}
 
     /* ── Menu bar ───────────────────────────────────────────────── */
@@ -284,7 +290,7 @@ def get_stylesheet() -> str:
         color: {TEXT_SEC};
         border-bottom: 1px solid {BORDER};
         padding: 2px 8px;
-        font-size: 12px;
+        font-size: {px(12)};
     }}
     QMenuBar::item {{
         background-color: transparent;
@@ -299,7 +305,7 @@ def get_stylesheet() -> str:
         background-color: {BG_SURFACE};
         border: 1px solid {BORDER_LT};
         padding: 4px;
-        font-size: 12px;
+        font-size: {px(12)};
     }}
     QMenu::item {{
         padding: 7px 24px 7px 16px;
@@ -321,12 +327,12 @@ def get_stylesheet() -> str:
     QMessageBox {{
         background-color: {BG_SURFACE};
     }}
-    QMessageBox QLabel {{ color: {TEXT_PRI}; font-size: 14px; }}
+    QMessageBox QLabel {{ color: {TEXT_PRI}; font-size: {px(14)}; }}
 
     /* ── CheckBox ───────────────────────────────────────────────── */
     QCheckBox {{
         color: {TEXT_PRI};
-        font-size: 12px;
+        font-size: {px(12)};
         spacing: 8px;
     }}
     QCheckBox::indicator {{

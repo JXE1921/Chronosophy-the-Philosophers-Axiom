@@ -1,11 +1,6 @@
 """
 ui/quote_widget.py — Daily Wisdom Widget.
 An elegant, prominent display of the day's chosen philosopher quote.
-
-v2 changes:
-- Refresh button now calls db.get_random_quote() instead of running raw SQL inline
-- Fade transition is now actually wired up via QGraphicsOpacityEffect + QPropertyAnimation
-- Favourite (♥) button toggles the underlying quote's favourite status
 """
 
 from PyQt6.QtWidgets import (
@@ -90,8 +85,10 @@ class QuoteWidget(QWidget):
         self.btn_fav = QPushButton("♡")
         self.btn_fav.setFixedSize(28, 28)
         self.btn_fav.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_fav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_fav.setToolTip("Add this quote to favourites")
-        self.btn_fav.clicked.connect(self._on_toggle_favourite)
+        # pressed fires on initial touch — light trackpad tap is enough
+        self.btn_fav.pressed.connect(self._on_toggle_favourite)
         self._style_fav_button(False)
         header.addWidget(self.btn_fav)
 

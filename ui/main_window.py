@@ -1,5 +1,5 @@
 """
-ui/main_window.py — Root application window for Chronosophy v2.
+ui/main_window.py — Root application window for Chronosophy v3.
 
 Coordinates:
 · Sidebar list (philosophers)
@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         # 5-tuple: (query, country, era, sort, favourites_only)
         self._current_filters: tuple = ("", "All", "All", "birth_year", False)
         self._philosophers: list[Philosopher] = []
+        self._ui_scale: float = 1.0          # global zoom level (Ctrl+= / Ctrl+-)
 
         self.setWindowTitle("Chronosophy — The Philosopher's Axiom")
         if icon_path:
@@ -163,6 +164,28 @@ class MainWindow(QMainWindow):
         # Open detail on Enter in list
         sc_enter = QShortcut(QKeySequence("Return"), self)
         sc_enter.activated.connect(self._on_view_philosopher)
+
+        # Global UI zoom — Ctrl+= to zoom in, Ctrl+- to zoom out, Ctrl+0 to reset
+        sc_zoom_in  = QShortcut(QKeySequence("Ctrl+="), self)
+        sc_zoom_in2 = QShortcut(QKeySequence("Ctrl++"), self)
+        sc_zoom_out = QShortcut(QKeySequence("Ctrl+-"), self)
+        sc_zoom_rst = QShortcut(QKeySequence("Ctrl+0"), self)
+        sc_zoom_in.activated.connect(lambda: self._set_ui_scale(self._ui_scale + 0.1))
+        sc_zoom_in2.activated.connect(lambda: self._set_ui_scale(self._ui_scale + 0.1))
+        sc_zoom_out.activated.connect(lambda: self._set_ui_scale(self._ui_scale - 0.1))
+        sc_zoom_rst.activated.connect(lambda: self._set_ui_scale(1.0))
+
+    def _set_ui_scale(self, new_scale: float):
+        """Re-apply the entire stylesheet with a new font-size scale factor."""
+        from styles import get_stylesheet
+        self._ui_scale = max(0.6, min(2.0, new_scale))
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        app.setStyleSheet(get_stylesheet(self._ui_scale))
+        # Also scale the base application font so widgets without explicit sizes follow
+        f = app.font()
+        f.setPointSizeF(max(7, 12 * self._ui_scale))
+        app.setFont(f)
 
     # ── UI construction ──────────────────────────────────────────────────────
 
