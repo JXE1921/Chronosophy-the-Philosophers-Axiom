@@ -9,9 +9,9 @@ table for likely additions. Click a dot to filter to that country.
 """
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QToolTip
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QToolTip, QPushButton
 )
-from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QPointF, QRectF, QPoint, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QFontMetrics,
     QCursor, QRadialGradient
@@ -79,39 +79,41 @@ COUNTRY_COORDS: dict[str, tuple[float, float]] = {
 _CONTINENTS: list[list[tuple[float, float]]] = [
     # Eurasia (highly simplified)
     [(-10, 36), (-9, 43), (-1, 49), (2, 51), (8, 53), (13, 55), (18, 59),
-     (24, 65), (30, 70), (40, 72), (60, 75), (80, 73), (105, 73), (140, 72),
-     (160, 70), (170, 67), (175, 65), (170, 60), (160, 55), (145, 50),
-     (140, 45), (135, 40), (125, 35), (120, 30), (110, 22), (108, 17),
-     (105, 12), (100, 8), (95, 12), (88, 15), (82, 22), (78, 21), (72, 22),
-     (65, 25), (58, 25), (52, 27), (48, 29), (44, 35), (40, 38), (35, 36),
-     (28, 35), (22, 36), (18, 37), (12, 39), (5, 38), (-2, 36), (-9, 36)],
+    (24, 65), (30, 70), (40, 72), (60, 75), (80, 73), (105, 73), (140, 72),
+    (160, 70), (170, 67), (175, 65), (170, 60), (160, 55), (145, 50),
+    (140, 45), (135, 40), (125, 35), (120, 30), (110, 22), (108, 17),
+    (105, 12), (100, 8), (95, 12), (88, 15), (82, 22), (78, 21), (72, 22),
+    (65, 25), (58, 25), (52, 27), (48, 29), (44, 35), (40, 38), (35, 36),
+    (28, 35), (22, 36), (18, 37), (12, 39), (5, 38), (-2, 36), (-9, 36)],
 
     # Africa
     [(-17, 21), (-15, 28), (-7, 32), (0, 33), (10, 31), (20, 30), (30, 31),
-     (35, 24), (40, 16), (43, 11), (51, 11), (43, 0), (40, -10), (38, -16),
-     (35, -22), (30, -25), (25, -33), (20, -34), (15, -29), (10, -22),
-     (8, -10), (10, -3), (5, 4), (-2, 5), (-8, 5), (-13, 12), (-17, 14)],
+    (35, 24), (40, 16), (43, 11), (51, 11), (43, 0), (40, -10), (38, -16),
+    (35, -22), (30, -25), (25, -33), (20, -34), (15, -29), (10, -22),
+    (8, -10), (10, -3), (5, 4), (-2, 5), (-8, 5), (-13, 12), (-17, 14)],
 
     # North America
     [(-160, 65), (-140, 70), (-120, 70), (-100, 73), (-80, 73), (-65, 60),
-     (-55, 50), (-65, 45), (-72, 40), (-78, 35), (-80, 28), (-82, 25),
-     (-90, 20), (-100, 17), (-105, 22), (-115, 30), (-120, 35), (-125, 45),
-     (-130, 55), (-145, 60), (-160, 60), (-165, 65)],
+    (-55, 50), (-65, 45), (-72, 40), (-78, 35), (-80, 28), (-82, 25),
+    (-90, 20), (-100, 17), (-105, 22), (-115, 30), (-120, 35), (-125, 45),
+    (-130, 55), (-145, 60), (-160, 60), (-165, 65)],
 
     # South America
     [(-80, 12), (-72, 11), (-62, 8), (-52, 5), (-42, -5), (-38, -15),
-     (-40, -22), (-45, -30), (-58, -38), (-65, -50), (-70, -55), (-72, -50),
-     (-75, -40), (-77, -28), (-78, -15), (-80, -5), (-82, 5), (-80, 12)],
+    (-40, -22), (-45, -30), (-58, -38), (-65, -50), (-70, -55), (-72, -50),
+    (-75, -40), (-77, -28), (-78, -15), (-80, -5), (-82, 5), (-80, 12)],
 
     # Australia
     [(115, -22), (122, -20), (130, -13), (138, -12), (145, -15), (152, -25),
-     (153, -32), (148, -38), (140, -38), (130, -32), (120, -34), (115, -30),
-     (115, -22)],
+    (153, -32), (148, -38), (140, -38), (130, -32), (120, -34), (115, -30),
+    (115, -22)],
 ]
 
 
 class WorldMapCanvas(QWidget):
     country_clicked = pyqtSignal(str)
+
+    _DRAG_THRESHOLD = 6    # px — distinguishes tap-on-dot from drag-to-pan
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -119,9 +121,21 @@ class WorldMapCanvas(QWidget):
         self._country_counts: dict[str, int] = {}
         self._hover_country: str | None = None
         self._dot_hits: list[tuple[QPointF, float, str]] = []
+        # ── Pan / zoom state ─────────────────────────────────────────────────
+        self._zoom_factor: float = 1.0
+        self._pan_offset: QPointF = QPointF(0.0, 0.0)
+        self._pan_anchor: QPoint | None = None       # left-drag pan anchor
+        self._press_dot_country: str | None = None   # dot the user tapped on
+        self._press_dot_pos: QPoint | None = None    # where the tap happened
+        # ─────────────────────────────────────────────────────────────────────
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(700, 380)
+
+    def reset_view(self):
+        self._zoom_factor = 1.0
+        self._pan_offset = QPointF(0.0, 0.0)
+        self.update()
 
     def set_philosophers(self, philosophers: list[Philosopher]):
         self._philosophers = philosophers
@@ -135,16 +149,42 @@ class WorldMapCanvas(QWidget):
     # ── Projection: lng/lat → canvas x/y ────────────────────────────────────
 
     def _project(self, lng: float, lat: float) -> QPointF:
-        """Equirectangular projection with margins."""
+        """Equirectangular projection, then apply current zoom + pan.
+
+        All painted geometry goes through this function, so pan/zoom moves
+        continents, grid lines, and country dots together perfectly.
+        """
         margin_x = 30
         margin_y = 30
         w = self.width() - 2 * margin_x
         h = self.height() - 2 * margin_y
-        # Clamp lat to ±75 so polar regions don't waste space
         lat = max(-75, min(75, lat))
-        x = margin_x + ((lng + 180) / 360) * w
-        y = margin_y + ((75 - lat) / 150) * h
+        # Base (unzoomed) screen position
+        bx = margin_x + ((lng + 180) / 360) * w
+        by = margin_y + ((75 - lat) / 150) * h
+        # Zoom is centred on the canvas centre, then pan is added
+        cx = self.width() / 2
+        cy = self.height() / 2
+        x = cx + (bx - cx) * self._zoom_factor + self._pan_offset.x()
+        y = cy + (by - cy) * self._zoom_factor + self._pan_offset.y()
         return QPointF(x, y)
+
+    def _zoom_to(self, factor: float, anchor: QPointF):
+        """Zoom by `factor` keeping the screen point `anchor` stationary."""
+        old_z = self._zoom_factor
+        new_z = max(0.5, min(8.0, old_z * factor))
+        # Derive the "base canvas" position under the anchor before the zoom
+        cx = self.width() / 2
+        cy = self.height() / 2
+        base_x = (anchor.x() - cx - self._pan_offset.x()) / old_z + cx
+        base_y = (anchor.y() - cy - self._pan_offset.y()) / old_z + cy
+        # After the zoom, the same base point must map back to the same screen pos
+        self._pan_offset = QPointF(
+            anchor.x() - cx - (base_x - cx) * new_z,
+            anchor.y() - cy - (base_y - cy) * new_z,
+        )
+        self._zoom_factor = new_z
+        self.update()
 
     # ── Painting ────────────────────────────────────────────────────────────
 
@@ -206,7 +246,7 @@ class WorldMapCanvas(QWidget):
             painter.setPen(QColor(TEXT_DIM))
             painter.setFont(QFont("Georgia", 11, QFont.Weight.Normal, True))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                             "No philosophers loaded.")
+                            "No philosophers loaded.")
             return
 
         max_count = max(self._country_counts.values())
@@ -215,7 +255,7 @@ class WorldMapCanvas(QWidget):
         painter.setFont(font)
 
         for country, count in sorted(self._country_counts.items(),
-                                     key=lambda kv: -kv[1]):
+                                    key=lambda kv: -kv[1]):
             coords = COUNTRY_COORDS.get(country)
             if not coords:
                 continue
@@ -277,7 +317,43 @@ class WorldMapCanvas(QWidget):
 
     # ── Mouse events ─────────────────────────────────────────────────────────
 
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = event.position()
+        # Check if pressing on a dot
+        for pt, r, country in self._dot_hits:
+            dx = pos.x() - pt.x()
+            dy = pos.y() - pt.y()
+            if dx * dx + dy * dy <= r * r:
+                self._press_dot_country = country
+                self._press_dot_pos = event.pos()
+                return
+        # Pressing on empty ocean/land → start pan
+        self._pan_anchor = event.pos()
+        self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+
     def mouseMoveEvent(self, event):
+        # ── Left-drag pan ────────────────────────────────────────────────────
+        if self._pan_anchor is not None:
+            delta = event.pos() - self._pan_anchor
+            self._pan_offset += QPointF(delta.x(), delta.y())
+            self._pan_anchor = event.pos()
+            self._hover_country = None          # suppress hover while panning
+            QToolTip.hideText()
+            self.update()
+            return
+
+        # ── Pressed on dot but now dragging — promote to pan ─────────────────
+        if self._press_dot_country is not None and self._press_dot_pos is not None:
+            if (event.pos() - self._press_dot_pos).manhattanLength() > self._DRAG_THRESHOLD:
+                self._pan_anchor = event.pos()
+                self._press_dot_country = None
+                self._press_dot_pos = None
+                self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            return
+
+        # ── Hover detection ──────────────────────────────────────────────────
         pos = event.position()
         hovered = None
         for pt, r, country in self._dot_hits:
@@ -293,7 +369,7 @@ class WorldMapCanvas(QWidget):
             if hovered:
                 count = self._country_counts.get(hovered, 0)
                 names = [p.name for p in self._philosophers
-                         if p.birth_country == hovered]
+                        if p.birth_country == hovered]
                 preview = ", ".join(names[:6])
                 if len(names) > 6:
                     preview += f" + {len(names) - 6} more"
@@ -308,16 +384,52 @@ class WorldMapCanvas(QWidget):
             Qt.CursorShape.PointingHandCursor if hovered else Qt.CursorShape.ArrowCursor
         ))
 
-    def mousePressEvent(self, event):
+    def mouseReleaseEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pos = event.position()
-        for pt, r, country in self._dot_hits:
-            dx = pos.x() - pt.x()
-            dy = pos.y() - pt.y()
-            if dx * dx + dy * dy <= r * r:
-                self.country_clicked.emit(country)
-                return
+        # End a pan
+        if self._pan_anchor is not None:
+            self._pan_anchor = None
+            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            return
+        # Clean tap on a dot → filter by country
+        country = self._press_dot_country
+        self._press_dot_country = None
+        self._press_dot_pos = None
+        if country:
+            self.country_clicked.emit(country)
+
+    def wheelEvent(self, event):
+        """Ctrl + scroll = zoom (anchored on cursor). Plain scroll pans."""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            factor = 1.12 if delta > 0 else 1 / 1.12
+            self._zoom_to(factor, event.position())
+            event.accept()
+        else:
+            # Two-finger swipe pan (vertical → vertical, horizontal → horizontal)
+            dx = event.angleDelta().x()
+            dy = event.angleDelta().y()
+            self._pan_offset += QPointF(dx * 0.5, dy * 0.5)
+            self.update()
+            event.accept()
+
+    def event(self, ev):
+        """Handle native trackpad pinch-to-zoom."""
+        from PyQt6.QtCore import QEvent
+        if ev.type() == QEvent.Type.NativeGesture:
+            try:
+                from PyQt6.QtGui import QNativeGestureEvent
+                from PyQt6.QtCore import Qt as _Qt
+                if isinstance(ev, QNativeGestureEvent):
+                    if ev.gestureType() == _Qt.NativeGestureType.ZoomNativeGesture:
+                        factor = 1.0 + ev.value()
+                        self._zoom_to(factor, ev.position())
+                        ev.accept()
+                        return True
+            except Exception:
+                pass
+        return super().event(ev)
 
     def leaveEvent(self, event):
         if self._hover_country is not None:
@@ -347,13 +459,24 @@ class WorldMapView(QWidget):
         header.setStyleSheet(f"background: {BG_SURFACE}; border-bottom: 1px solid {BORDER};")
         hl = QHBoxLayout(header)
         hl.setContentsMargins(16, 0, 16, 0)
+        hl.setSpacing(10)
+
         title = QLabel("WORLD MAP")
         title.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9px; letter-spacing: 2px; background: transparent;")
         hl.addWidget(title)
+
         sub = QLabel("Birth countries · click any dot to filter")
         sub.setStyleSheet(f"color: {GOLD_DIM}; font-size: 11px; background: transparent; font-style: italic;")
         hl.addWidget(sub)
+
         hl.addStretch()
+
+        btn_reset = QPushButton("⤺  Reset View")
+        btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reset.setToolTip("Reset pan and zoom to default")
+        btn_reset.clicked.connect(lambda: self.canvas.reset_view())
+        hl.addWidget(btn_reset)
+
         layout.addWidget(header)
 
         self.canvas = WorldMapCanvas()

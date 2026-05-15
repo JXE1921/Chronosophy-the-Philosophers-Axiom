@@ -3,7 +3,7 @@ ui/timeline_widget.py — Chronological philosopher timeline.
 Custom-painted scrollable canvas with proportional year positioning,
 era bands, and clickable philosopher cards.
 
-v3 changes:
+v4 changes:
 - Ctrl + scroll wheel zooms the timeline horizontally (anchored at the cursor)
 - Plain scroll wheel pans horizontally (faster than dragging the scrollbar)
 - Middle-mouse drag also pans horizontally
@@ -56,7 +56,12 @@ class TimelineCanvas(QWidget):
         self._min_year = -500
         self._max_year = 2025
         self._canvas_w = 800
-        self._pan_anchor: QPoint | None = None     # for middle-mouse drag
+        # ── Pan tracking ──────────────────────────────────────────────────────
+        self._pan_anchor: QPoint | None = None      # middle-mouse drag
+        self._left_pan_anchor: QPoint | None = None  # left-button drag (empty space)
+        self._press_bar_pid: int = -1               # bar the user pressed on
+        self._press_bar_pos: QPoint | None = None   # where the press happened
+        # ─────────────────────────────────────────────────────────────────────
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -343,19 +348,52 @@ class TimelineCanvas(QWidget):
 
     # ── Mouse / wheel events ─────────────────────────────────────────────────
 
+    # ── Mouse / wheel events ─────────────────────────────────────────────────
+
+    # Drag threshold in px — if the user moves more than this before releasing,
+    # we treat the gesture as a pan rather than a click.
+    _DRAG_THRESHOLD = 6
+
     def mouseMoveEvent(self, event):
-        # Middle-button pan
+        # ── Middle-button drag pan (any direction) ──────────────────────────
         if self._pan_anchor is not None:
             scroll = self._find_scroll_area()
             if scroll:
                 delta = event.pos() - self._pan_anchor
-                bar = scroll.horizontalScrollBar()
-                bar.setValue(bar.value() - delta.x())
-                vbar = scroll.verticalScrollBar()
-                vbar.setValue(vbar.value() - delta.y())
+                scroll.horizontalScrollBar().setValue(
+                    scroll.horizontalScrollBar().value() - delta.x()
+                )
+                scroll.verticalScrollBar().setValue(
+                    scroll.verticalScrollBar().value() - delta.y()
+                )
                 self._pan_anchor = event.pos()
             return
 
+        # ── Left-button drag pan (started on empty space) ───────────────────
+        if self._left_pan_anchor is not None:
+            scroll = self._find_scroll_area()
+            if scroll:
+                delta = event.pos() - self._left_pan_anchor
+                scroll.horizontalScrollBar().setValue(
+                    scroll.horizontalScrollBar().value() - delta.x()
+                )
+                scroll.verticalScrollBar().setValue(
+                    scroll.verticalScrollBar().value() - delta.y()
+                )
+                self._left_pan_anchor = event.pos()
+            return
+
+        # ── Left pressed on a bar, but now dragging — promote to pan ────────
+        if self._press_bar_pid >= 0 and self._press_bar_pos is not None:
+            if (event.pos() - self._press_bar_pos).manhattanLength() > self._DRAG_THRESHOLD:
+                # User intended to pan, not click
+                self._left_pan_anchor = event.pos()
+                self._press_bar_pid = -1
+                self._press_bar_pos = None
+                self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            return
+
+        # ── Hover detection ──────────────────────────────────────────────────
         pos = event.pos()
         hovered = -1
         hovered_p: Philosopher | None = None
@@ -371,13 +409,12 @@ class TimelineCanvas(QWidget):
         if hovered != self._hover_id:
             self._hover_id = hovered
             self.update()
-            # Show tooltip with contribution preview
             if hovered_p:
                 preview = (hovered_p.contributions or "").strip().replace("\n", " ")
                 if len(preview) > 180:
                     preview = preview[:177] + "…"
-                tip = f"<b>{hovered_p.name}</b><br>" \
-                    f"<i>{hovered_p.lifespan_label} · {hovered_p.birth_country}</i>"
+                tip = (f"<b>{hovered_p.name}</b><br>"
+                        f"<i>{hovered_p.lifespan_label} · {hovered_p.birth_country}</i>")
                 if preview:
                     tip += f"<br><br>{preview}"
                 QToolTip.showText(self.mapToGlobal(pos), tip, self)
@@ -385,21 +422,49 @@ class TimelineCanvas(QWidget):
                 QToolTip.hideText()
 
     def mousePressEvent(self, event):
+        # Middle button → pan (any direction)
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_anchor = event.pos()
             self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             return
+
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.pos()
+            # Check if pressing on a philosopher bar
             for rect, pid in self._hit_rects:
                 if rect.contains(pos):
-                    self.philosopher_clicked.emit(pid)
+                    # Record the press; we'll emit on release if no drag happened
+                    self._press_bar_pid = pid
+                    self._press_bar_pos = pos
                     return
+            # Pressing on empty canvas → start pan immediately
+            self._left_pan_anchor = pos
+            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_anchor = None
             self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            return
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            # End a left-button pan
+            if self._left_pan_anchor is not None:
+                self._left_pan_anchor = None
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+                return
+
+            # Releasing after pressing on a bar (no significant drag) → it's a click
+            pid = self._press_bar_pid
+            self._press_bar_pid = -1
+            self._press_bar_pos = None
+            if pid >= 0:
+                # Confirm the cursor is still over the same bar on release
+                pos = event.pos()
+                for rect, rpid in self._hit_rects:
+                    if rect.contains(pos) and rpid == pid:
+                        self.philosopher_clicked.emit(pid)
+                        break
 
     def wheelEvent(self, event):
         # Ctrl + wheel = zoom; plain wheel = horizontal pan (two-finger swipe)
@@ -499,14 +564,6 @@ class TimelineView(QWidget):
             layout.addWidget(lbl)
 
         layout.addStretch()
-
-        # Gesture hint — right-aligned, very subtle
-        hint = QLabel("Pinch or Ctrl + scroll to zoom  ·  Two-finger swipe to pan")
-        hint.setStyleSheet(
-            f"color: {TEXT_DIM}; font-size: 9px; font-style: italic; background: transparent;"
-        )
-        layout.addWidget(hint)
-
         return w
 
     def set_philosophers(self, philosophers: list[Philosopher]):

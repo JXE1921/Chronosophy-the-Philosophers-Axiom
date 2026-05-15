@@ -1,6 +1,11 @@
 """
 ui/quote_widget.py — Daily Wisdom Widget.
 An elegant, prominent display of the day's chosen philosopher quote.
+
+v4 changes:
+- Refresh button now calls db.get_random_quote() instead of running raw SQL inline
+- Fade transition is now actually wired up via QGraphicsOpacityEffect + QPropertyAnimation
+- Favourite (♥) button toggles the underlying quote's favourite status
 """
 
 from PyQt6.QtWidgets import (

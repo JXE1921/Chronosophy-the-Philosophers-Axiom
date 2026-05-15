@@ -1,5 +1,5 @@
 """
-ui/main_window.py — Root application window for Chronosophy v3.
+ui/main_window.py — Root application window for Chronosophy v4.
 
 Coordinates:
 · Sidebar list (philosophers)
@@ -457,7 +457,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, str, str, str, bool)
     def _on_filters_changed(self, query: str, country: str, era: str,
-                            sort: str, favs_only: bool):
+                             sort: str, favs_only: bool):
         self._current_filters = (query, country, era, sort, favs_only)
         self._load_data()
 
