@@ -2,8 +2,8 @@
 ui/main_window.py — Root application window for Chronosophy v9.
 
 v9 additions:
-· Reset View button now also resets scroll position to the first philosopher
-· UI zoom (Ctrl + = / − / 0) is persisted across sessions in QSettings
+  · Reset View button now also resets scroll position to the first philosopher
+  · UI zoom (Ctrl + = / − / 0) is persisted across sessions in QSettings
 """
 
 import sys
@@ -37,6 +37,7 @@ from ui.comparison_dialog import ComparisonDialog
 from ui.about_dialog import AboutDialog
 from ui.shortcuts_dialog import ShortcutsDialog
 from services.export import export_csv, export_json
+from services.import_data import import_json as _import_json, import_csv as _import_csv
 
 
 # Tab indices — keep in sync with _build_tabs()
@@ -219,12 +220,6 @@ class MainWindow(QMainWindow):
                 border-radius: 5px;
                 padding: 2px 9px;
             """)
-            # Rescale the fixed width so the box stays constant at any zoom level.
-            base = getattr(self, '_clock_fixed_width_base', 90)
-            self.clock_label.setFixedWidth(int(base * s))
-            self.clock_label.setAlignment(
-                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
-            )
 
 
 
@@ -325,14 +320,6 @@ class MainWindow(QMainWindow):
             border: 1px solid {BORDER}; border-radius: 5px; padding: 2px 9px;
         """)
         self.clock_label.setToolTip("London time (Europe/London)")
-        # Fix the width so the border box never resizes as digits change.
-        # "00:00:00" uses the widest digit-set in most proportional fonts;
-        # measure it once at the default scale and lock the label to that size.
-        self.clock_label.setAlignment(
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
-        )
-        self._clock_fixed_width_base = 116  # pixels at scale 1.0 — recalc on zoom
-        self.clock_label.setFixedWidth(self._clock_fixed_width_base)
         layout.addWidget(self.clock_label)
         self._clock_timer = QTimer(self)
         self._clock_timer.timeout.connect(self._update_clock)
@@ -400,6 +387,16 @@ class MainWindow(QMainWindow):
         act_json = QAction("Export to JSON…", self)
         act_json.triggered.connect(self._on_export_json)
         file_menu.addAction(act_json)
+
+        file_menu.addSeparator()
+
+        act_import_json = QAction("Import from JSON…", self)
+        act_import_json.triggered.connect(self._on_import_json)
+        file_menu.addAction(act_import_json)
+
+        act_import_csv = QAction("Import from CSV…", self)
+        act_import_csv.triggered.connect(self._on_import_csv)
+        file_menu.addAction(act_import_csv)
 
         file_menu.addSeparator()
 
@@ -585,8 +582,7 @@ class MainWindow(QMainWindow):
         for p in self._philosophers:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, p.id)
-            fav_mark = " ♥" if any(q.is_favourite for q in p.quotes) else ""
-            item.setText(f"{p.name}{fav_mark}\n{p.lifespan_label}  ·  {p.birth_country}")
+            item.setText(f"{p.name}\n{p.lifespan_label}  ·  {p.birth_country}")
             item.setForeground(QColor(TEXT_PRI))
             self.philosopher_list.addItem(item)
         self.count_lbl.setText(str(len(self._philosophers)))
@@ -606,7 +602,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, str, str, str, bool)
     def _on_filters_changed(self, query: str, country: str, era: str,
-                            sort: str, favs_only: bool):
+                             sort: str, favs_only: bool):
         self._current_filters = (query, country, era, sort, favs_only)
         self._load_data()
 
@@ -670,7 +666,7 @@ class MainWindow(QMainWindow):
     # ── Favourite toggled anywhere ────────────────────────────────────────────
 
     def _on_favourite_toggled(self, *args):
-        """Refresh the philosopher list (which shows ♥ markers) and stats."""
+        """Refresh the philosopher list and stats."""
         self._refresh_list()
         if self.tabs.currentIndex() == TAB_STATS:
             self.stats_view.refresh()
@@ -757,6 +753,56 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Export Complete", msg)
             else:
                 QMessageBox.warning(self, "Export Failed", msg)
+
+    def _on_import_json(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import from JSON", "",
+            "JSON files (*.json);;All files (*)"
+        )
+        if not path:
+            return
+        reply = QMessageBox.warning(
+            self, "Replace Database?",
+            "Importing will replace your entire database with the contents of this file.\n\n"
+            "This cannot be undone. Are you sure?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        ok, msg = _import_json(path)
+        if ok:
+            self.quote_widget.refresh()
+            self._load_data()
+            self.stats_view.refresh()
+            QMessageBox.information(self, "Import Complete", msg)
+        else:
+            QMessageBox.warning(self, "Import Failed", msg)
+
+    def _on_import_csv(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import from CSV", "",
+            "CSV files (*.csv);;All files (*)"
+        )
+        if not path:
+            return
+        reply = QMessageBox.warning(
+            self, "Replace Database?",
+            "Importing will replace your entire database with the contents of this file.\n\n"
+            "This cannot be undone. Are you sure?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        ok, msg = _import_csv(path)
+        if ok:
+            self.quote_widget.refresh()
+            self._load_data()
+            self.stats_view.refresh()
+            QMessageBox.information(self, "Import Complete", msg)
+        else:
+            QMessageBox.warning(self, "Import Failed", msg)
 
     # ── View helpers ──────────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@
 ui/search_bar.py — Search, filter, and sort controls.
 Emits a signal whenever the user changes any filter so the parent can reload data.
 
-v10 changes:
+v9 changes:
 - Favourites-only checkbox
 - "By Country" sort option
 - Signal now carries a 5th arg: favourites_only (bool)
@@ -103,7 +103,7 @@ class SearchBar(QWidget):
         layout.addWidget(self.cmb_sort)
 
         # Favourites toggle
-        self.chk_fav = QCheckBox("♥  Favourites only")
+        self.chk_fav = QCheckBox("Favourites only")
         self.chk_fav.setStyleSheet(f"""
             QCheckBox {{
                 color: {TEXT_DIM};

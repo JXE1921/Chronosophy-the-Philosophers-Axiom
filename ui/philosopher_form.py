@@ -31,6 +31,7 @@ class PhilosopherFormDialog(QDialog):
         self.setWindowTitle("Edit Philosopher" if self.is_edit else "Add Philosopher")
         self.setMinimumWidth(600)
         self.setMinimumHeight(680)
+        self.resize(660, 800)   # sensible opening size — user can still resize freely
         self.setModal(True)
         # Inherit the app-wide icon so every dialog shows it in the title bar
         if parent and not parent.windowIcon().isNull():

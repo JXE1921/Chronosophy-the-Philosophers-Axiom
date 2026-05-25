@@ -3,7 +3,7 @@ database.py — SQLite data layer for Chronosophy.
 Handles all persistence: CRUD for philosophers, quotes, favourites, daily quote,
 teacher relationship graph, and aggregate statistics.
 
-v10 additions:
+v9 additions:
 - quotes.is_favourite column (with migration for existing databases)
 - teacher_links table for normalised many-to-many relationships
 - get_random_quote (used by the New Quote button — no more raw SQL in UI)
@@ -102,7 +102,7 @@ def initialise_db() -> None:
             CREATE TABLE IF NOT EXISTS quotes (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
                 philosopher_id   INTEGER NOT NULL
-                                    REFERENCES philosophers(id) ON DELETE CASCADE,
+                                     REFERENCES philosophers(id) ON DELETE CASCADE,
                 text             TEXT    NOT NULL
             );
 
@@ -112,7 +112,7 @@ def initialise_db() -> None:
                 selected_on      TEXT    NOT NULL       -- ISO date string
             );
 
-            -- v10: normalised teacher graph
+            -- v9: normalised teacher graph
             CREATE TABLE IF NOT EXISTS teacher_links (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id  INTEGER NOT NULL REFERENCES philosophers(id) ON DELETE CASCADE,
@@ -202,10 +202,10 @@ def add_philosopher(p: Philosopher, quote_texts: list[str]) -> int:
     with _connect() as conn:
         cur = conn.execute(
             """INSERT INTO philosophers
-                (name, birth_year, death_year, birth_city, birth_country, teachers, contributions)
-                VALUES (?,?,?,?,?,?,?)""",
+               (name, birth_year, death_year, birth_city, birth_country, teachers, contributions)
+               VALUES (?,?,?,?,?,?,?)""",
             (p.name, p.birth_year, p.death_year,
-            p.birth_city, p.birth_country, p.teachers, p.contributions)
+             p.birth_city, p.birth_country, p.teachers, p.contributions)
         )
         pid = cur.lastrowid
         for text in quote_texts:
@@ -216,6 +216,110 @@ def add_philosopher(p: Philosopher, quote_texts: list[str]) -> int:
                 )
     _rebuild_teacher_links()    # keep graph in sync
     return pid
+
+
+def add_philosopher_with_quotes(p: Philosopher, quotes: list[dict]) -> int:
+    """Insert a philosopher + full quote objects (text + is_favourite).
+
+    Used by the import service so that favourite flags from an exported JSON
+    are faithfully preserved in the newly-imported data.
+
+    `quotes` is a list of dicts with keys: 'text' (str), 'is_favourite' (bool/int).
+    Returns the new philosopher ID.
+    """
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO philosophers
+               (name, birth_year, death_year, birth_city, birth_country, teachers, contributions)
+               VALUES (?,?,?,?,?,?,?)""",
+            (p.name, p.birth_year, p.death_year,
+             p.birth_city, p.birth_country, p.teachers, p.contributions)
+        )
+        pid = cur.lastrowid
+        for q in quotes:
+            text = str(q.get("text", "")).strip()
+            if text:
+                is_fav = int(bool(q.get("is_favourite", False)))
+                conn.execute(
+                    "INSERT INTO quotes (philosopher_id, text, is_favourite) VALUES (?,?,?)",
+                    (pid, text, is_fav)
+                )
+    _rebuild_teacher_links()
+    return pid
+
+
+def philosopher_name_exists(name: str) -> bool:
+    """Return True if a philosopher with this exact name (case-insensitive) is already in the DB."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM philosophers WHERE LOWER(name)=LOWER(?)", (name,)
+        ).fetchone()
+        return row is not None
+
+
+def get_philosopher_by_name(name: str) -> Optional[Philosopher]:
+    """Return the Philosopher whose name matches (case-insensitive), or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM philosophers WHERE LOWER(name)=LOWER(?)", (name,)
+        ).fetchone()
+        if not row:
+            return None
+        quotes = _get_quotes_for(conn, row["id"])
+        return _row_to_philosopher(row, quotes)
+
+
+def merge_quotes_into_philosopher(philosopher_id: int,
+                                   quotes: list[dict]) -> tuple[int, int]:
+    """Merge imported quotes into an existing philosopher.
+
+    For each quote in `quotes` (dicts with 'text' and 'is_favourite'):
+      - If a quote with the same text (case-insensitive) already exists:
+          · If the imported quote is favourited and the stored one is not,
+            promote it to favourite (never demote an existing favourite).
+          · Otherwise leave it alone.
+      - If the quote text is genuinely new, insert it with its is_favourite flag.
+
+    Returns (quotes_added, favourites_promoted).
+    """
+    quotes_added = 0
+    favourites_promoted = 0
+
+    with _connect() as conn:
+        # Build lookup of existing quotes: lowercase text → (id, is_favourite)
+        existing_rows = conn.execute(
+            "SELECT id, text, is_favourite FROM quotes WHERE philosopher_id=?",
+            (philosopher_id,)
+        ).fetchall()
+        existing = {r["text"].lower(): (r["id"], bool(r["is_favourite"]))
+                    for r in existing_rows}
+
+        for q in quotes:
+            text = str(q.get("text", "")).strip()
+            if not text:
+                continue
+            is_fav = bool(q.get("is_favourite", False))
+            key = text.lower()
+
+            if key in existing:
+                # Quote already present — promote to favourite if needed
+                existing_id, already_fav = existing[key]
+                if is_fav and not already_fav:
+                    conn.execute(
+                        "UPDATE quotes SET is_favourite=1 WHERE id=?",
+                        (existing_id,)
+                    )
+                    favourites_promoted += 1
+            else:
+                # Brand-new quote for this philosopher
+                conn.execute(
+                    "INSERT INTO quotes (philosopher_id, text, is_favourite) VALUES (?,?,?)",
+                    (philosopher_id, text, int(is_fav))
+                )
+                quotes_added += 1
+                existing[key] = (0, is_fav)   # prevent re-insertion on duplicate in same file
+
+    return quotes_added, favourites_promoted
 
 
 def update_philosopher(p: Philosopher, quote_texts: list[str]) -> None:
@@ -229,11 +333,11 @@ def update_philosopher(p: Philosopher, quote_texts: list[str]) -> None:
 
         conn.execute(
             """UPDATE philosophers SET
-                name=?, birth_year=?, death_year=?, birth_city=?,
-                birth_country=?, teachers=?, contributions=?
-                WHERE id=?""",
+               name=?, birth_year=?, death_year=?, birth_city=?,
+               birth_country=?, teachers=?, contributions=?
+               WHERE id=?""",
             (p.name, p.birth_year, p.death_year, p.birth_city,
-            p.birth_country, p.teachers, p.contributions, p.id)
+             p.birth_country, p.teachers, p.contributions, p.id)
         )
         conn.execute("DELETE FROM quotes WHERE philosopher_id=?", (p.id,))
         for text in quote_texts:
@@ -250,6 +354,15 @@ def delete_philosopher(pid: int) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM philosophers WHERE id=?", (pid,))
     # Cascade also clears teacher_links for this row, no rebuild needed
+
+
+def clear_all_philosophers() -> None:
+    """Delete every philosopher (and their quotes/links) from the database.
+    Used by the import service before a full replace-import."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM philosophers")
+        conn.execute("DELETE FROM teacher_links")
+        conn.execute("DELETE FROM daily_quote")
 
 
 def search_philosophers(query: str, country: str = "",
@@ -301,15 +414,15 @@ def get_daily_quote() -> Optional[tuple[str, str]]:
         if row and row["selected_on"] == today:
             qrow = conn.execute(
                 """SELECT q.text, p.name FROM quotes q
-                    JOIN philosophers p ON p.id = q.philosopher_id
-                    WHERE q.id=?""", (row["quote_id"],)
+                   JOIN philosophers p ON p.id = q.philosopher_id
+                   WHERE q.id=?""", (row["quote_id"],)
             ).fetchone()
             if qrow:
                 return qrow["text"], qrow["name"]
 
         all_quotes = conn.execute(
             """SELECT q.id, q.text, p.name FROM quotes q
-                JOIN philosophers p ON p.id = q.philosopher_id"""
+               JOIN philosophers p ON p.id = q.philosopher_id"""
         ).fetchall()
 
         if not all_quotes:
@@ -318,9 +431,9 @@ def get_daily_quote() -> Optional[tuple[str, str]]:
         chosen = random.choice(all_quotes)
         conn.execute(
             """INSERT INTO daily_quote (id, quote_id, selected_on)
-                VALUES (1, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET quote_id=excluded.quote_id,
-                                            selected_on=excluded.selected_on""",
+               VALUES (1, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET quote_id=excluded.quote_id,
+                                             selected_on=excluded.selected_on""",
             (chosen["id"], today)
         )
         return chosen["text"], chosen["name"]
@@ -335,8 +448,8 @@ def get_random_quote() -> Optional[tuple[str, str]]:
     with _connect() as conn:
         row = conn.execute(
             """SELECT q.text, p.name FROM quotes q
-                JOIN philosophers p ON p.id = q.philosopher_id
-                ORDER BY RANDOM() LIMIT 1"""
+               JOIN philosophers p ON p.id = q.philosopher_id
+               ORDER BY RANDOM() LIMIT 1"""
         ).fetchone()
         return (row["text"], row["name"]) if row else None
 
@@ -359,9 +472,9 @@ def get_favourite_quotes() -> list[tuple[int, str, str, int]]:
     with _connect() as conn:
         rows = conn.execute(
             """SELECT q.id, q.text, p.name, p.id AS pid FROM quotes q
-                JOIN philosophers p ON p.id = q.philosopher_id
-                WHERE q.is_favourite=1
-                ORDER BY p.name"""
+               JOIN philosophers p ON p.id = q.philosopher_id
+               WHERE q.is_favourite=1
+               ORDER BY p.name"""
         ).fetchall()
         return [(r["id"], r["text"], r["name"], r["pid"]) for r in rows]
 
@@ -387,10 +500,10 @@ def get_statistics() -> dict:
 
         countries = conn.execute(
             """SELECT birth_country AS country, COUNT(*) AS n
-                FROM philosophers
-                WHERE birth_country != ''
-                GROUP BY birth_country
-                ORDER BY n DESC, birth_country"""
+               FROM philosophers
+               WHERE birth_country != ''
+               GROUP BY birth_country
+               ORDER BY n DESC, birth_country"""
         ).fetchall()
         country_counts = [(r["country"], r["n"]) for r in countries]
 
@@ -402,10 +515,10 @@ def get_statistics() -> dict:
         # Most-quoted (philosophers with most quotes)
         top_quoted = conn.execute(
             """SELECT p.name, COUNT(q.id) AS n
-                FROM philosophers p LEFT JOIN quotes q ON q.philosopher_id = p.id
-                GROUP BY p.id
-                ORDER BY n DESC, p.name
-                LIMIT 5"""
+               FROM philosophers p LEFT JOIN quotes q ON q.philosopher_id = p.id
+               GROUP BY p.id
+               ORDER BY n DESC, p.name
+               LIMIT 5"""
         ).fetchall()
         top_quoted = [(r["name"], r["n"]) for r in top_quoted]
 
@@ -429,7 +542,7 @@ def _get_quotes_for(conn: sqlite3.Connection, pid: int) -> list[Quote]:
     ).fetchall()
     return [
         Quote(id=r["id"], philosopher_id=r["philosopher_id"],
-                text=r["text"], is_favourite=bool(r["is_favourite"]))
+              text=r["text"], is_favourite=bool(r["is_favourite"]))
         for r in rows
     ]
 
