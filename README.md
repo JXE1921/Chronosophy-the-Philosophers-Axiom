@@ -12,7 +12,7 @@ Search & Filtering — Filter by name, country, era, and favourited quotes. Sort
 Philosopher Management — A clean form to add, edit, and delete philosophers, with support for multiple quotes and teacher/influence links.
 Comparison Dialog — Side-by-side comparison of any two philosophers.
 Export — Export your full database to CSV or JSON via the File menu.
-Keyboard Shortcuts — Full keyboard navigation (Ctrl+1–5 for tabs, Ctrl+N, Ctrl+F, F11, and more).
+Customisable Keyboard Shortcuts — Full keyboard navigation (Ctrl+1–5 for tabs, Ctrl+N, Ctrl+F, F11, and more), all rebindable from Help → Keyboard Shortcuts. Click any binding, press a new combination, and it applies instantly — with conflict detection and reset-to-default for a single shortcut or the whole set. Custom bindings persist between sessions.
 Session Persistence — Window geometry, zoom level, and UI scale are all restored between sessions.
 
 **Tech Stack**

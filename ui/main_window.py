@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QMenuBar, QMenu
 )
 from PyQt6.QtCore import Qt, QSize, QSettings, QTimer, QTime, pyqtSlot
-from PyQt6.QtGui import QColor, QFont, QIcon, QAction, QKeySequence, QShortcut
+from PyQt6.QtGui import QColor, QFont, QIcon, QAction
 
 import database as db
 from database import Philosopher, search_philosophers, delete_philosopher, get_all_countries
@@ -36,6 +36,7 @@ from ui.detail_dialog import DetailDialog
 from ui.comparison_dialog import ComparisonDialog
 from ui.about_dialog import AboutDialog
 from ui.shortcuts_dialog import ShortcutsDialog
+from ui.shortcut_manager import ShortcutManager
 from services.export import export_csv, export_json
 from services.import_data import import_json as _import_json, import_csv as _import_csv
 
@@ -63,6 +64,10 @@ class MainWindow(QMainWindow):
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
         self.setMinimumSize(1050, 680)
+
+        # Central registry for every customisable shortcut — must exist before
+        # _build_ui(), since the dropdown menu reads its current bindings.
+        self.shortcuts = ShortcutManager(self, settings)
 
         self._build_ui()
         self._build_shortcuts()
@@ -109,31 +114,38 @@ class MainWindow(QMainWindow):
     # ── Global keyboard shortcuts ────────────────────────────────────────────
 
     def _build_shortcuts(self):
-        # Add philosopher
-        sc_add = QShortcut(QKeySequence("Ctrl+N"), self)
-        sc_add.activated.connect(self._on_add_philosopher)
+        """Register every action with the ShortcutManager, then build the live
+        QShortcuts.  The manager is the single source of truth — bindings here,
+        the menu hints, and the customiser dialog all stay in sync, and any user
+        overrides saved in QSettings are honoured automatically."""
+        sc = self.shortcuts
 
-        # Focus search
-        sc_search = QShortcut(QKeySequence("Ctrl+F"), self)
-        sc_search.activated.connect(lambda: self.search_bar.inp_search.setFocus())
+        # Navigation — switch tabs
+        sc.register("tab_timeline", lambda: self.tabs.setCurrentIndex(TAB_TIMELINE))
+        sc.register("tab_country",  lambda: self.tabs.setCurrentIndex(TAB_COUNTRY))
+        sc.register("tab_graph",    lambda: self.tabs.setCurrentIndex(TAB_GRAPH))
+        sc.register("tab_map",      lambda: self.tabs.setCurrentIndex(TAB_MAP))
+        sc.register("tab_stats",    lambda: self.tabs.setCurrentIndex(TAB_STATS))
 
-        # Delete selected
-        sc_delete = QShortcut(QKeySequence("Delete"), self)
-        sc_delete.activated.connect(self._on_delete_philosopher)
+        # Philosophers
+        sc.register("add",     self._on_add_philosopher)
+        sc.register("search",  lambda: self.search_bar.inp_search.setFocus())
+        sc.register("view",    self._on_view_philosopher)
+        sc.register("edit",    self._on_edit_philosopher)
+        sc.register("delete",  self._on_delete_philosopher)
+        sc.register("compare", self._on_compare)
 
-        # Open detail on Enter in list
-        sc_enter = QShortcut(QKeySequence("Return"), self)
-        sc_enter.activated.connect(self._on_view_philosopher)
+        # General
+        sc.register("zoom_in",    lambda: self._set_ui_scale(self._ui_scale + 0.1))
+        sc.register("zoom_out",   lambda: self._set_ui_scale(self._ui_scale - 0.1))
+        sc.register("zoom_reset", lambda: self._set_ui_scale(1.0))
+        sc.register("export_csv", self._on_export_csv)
+        sc.register("export_json", self._on_export_json)
+        sc.register("fullscreen", self._toggle_fullscreen)
+        sc.register("shortcuts",  self._open_shortcuts_dialog)
+        sc.register("quit",       self.close)
 
-        # Global UI zoom — Ctrl+= to zoom in, Ctrl+- to zoom out, Ctrl+0 to reset
-        sc_zoom_in  = QShortcut(QKeySequence("Ctrl+="), self)
-        sc_zoom_in2 = QShortcut(QKeySequence("Ctrl++"), self)
-        sc_zoom_out = QShortcut(QKeySequence("Ctrl+-"), self)
-        sc_zoom_rst = QShortcut(QKeySequence("Ctrl+0"), self)
-        sc_zoom_in.activated.connect(lambda: self._set_ui_scale(self._ui_scale + 0.1))
-        sc_zoom_in2.activated.connect(lambda: self._set_ui_scale(self._ui_scale + 0.1))
-        sc_zoom_out.activated.connect(lambda: self._set_ui_scale(self._ui_scale - 0.1))
-        sc_zoom_rst.activated.connect(lambda: self._set_ui_scale(1.0))
+        sc.build()
 
     def _set_ui_scale(self, new_scale: float, persist: bool = True):
         """Re-apply the entire stylesheet with a new font-size scale factor."""
@@ -293,7 +305,9 @@ class MainWindow(QMainWindow):
             }}
             QPushButton::menu-indicator {{ width: 0; image: none; }}
         """)
-        # Attach the popup menu — clicking the button shows it automatically
+        # Attach the popup menu — clicking the button shows it automatically.
+        # Stored so the menu can be rebuilt when shortcut bindings change.
+        self._logo_btn = logo_btn
         logo_btn.setMenu(self._build_app_menu())
         layout.addWidget(logo_btn)
         layout.addSpacing(10)
@@ -332,18 +346,30 @@ class MainWindow(QMainWindow):
         self.btn_add = QPushButton("＋  Add Philosopher")
         self.btn_add.setObjectName("btn_primary")
         self.btn_add.setFixedHeight(32)
-        self.btn_add.setToolTip("Add a new philosopher  (Ctrl+N)")
+        self.btn_add.setToolTip(
+            f"Add a new philosopher  ({self.shortcuts.display('add')})")
         self.btn_add.clicked.connect(self._on_add_philosopher)
         layout.addWidget(self.btn_add)
 
         return header
+
+    def _menu_label(self, text: str, action_id: str) -> str:
+        """Compose a menu-item label with the action's current binding appended.
+
+        Reads the live binding from the ShortcutManager so the hint always
+        matches whatever the user has customised (or nothing, if unbound)."""
+        binding = self.shortcuts.display(action_id)
+        if not binding or binding == "Unbound":
+            return text
+        return f"{text}  ({binding})"
 
     def _build_app_menu(self) -> "QMenu":
         """Build the popup QMenu that drops down from the ⟁ logo button.
 
         Three submenus — File, View, Help — exactly mirroring what the old
         inline menu bar had, but now hidden until the user clicks the logo.
-        All keyboard shortcuts are still active via QShortcut (_build_shortcuts).
+        All keyboard shortcuts are active via the ShortcutManager; the labels
+        below show each item's current binding as a hint only.
         """
         qss = f"""
             QMenu {{
@@ -380,11 +406,11 @@ class MainWindow(QMainWindow):
         file_menu = root.addMenu("  File")
         file_menu.setStyleSheet(qss)
 
-        act_csv = QAction("Export to CSV…", self)
+        act_csv = QAction(self._menu_label("Export to CSV…", "export_csv"), self)
         act_csv.triggered.connect(self._on_export_csv)
         file_menu.addAction(act_csv)
 
-        act_json = QAction("Export to JSON…", self)
+        act_json = QAction(self._menu_label("Export to JSON…", "export_json"), self)
         act_json.triggered.connect(self._on_export_json)
         file_menu.addAction(act_json)
 
@@ -400,7 +426,7 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        act_quit = QAction("Quit", self)
+        act_quit = QAction(self._menu_label("Quit", "quit"), self)
         act_quit.triggered.connect(self.close)
         file_menu.addAction(act_quit)
 
@@ -408,26 +434,30 @@ class MainWindow(QMainWindow):
         view_menu = root.addMenu("  View")
         view_menu.setStyleSheet(qss)
 
-        act_fs = QAction("Toggle Fullscreen", self)
+        act_fs = QAction(self._menu_label("Toggle Fullscreen", "fullscreen"), self)
         act_fs.triggered.connect(self._toggle_fullscreen)
         view_menu.addAction(act_fs)
 
         view_menu.addSeparator()
 
-        for idx, label in enumerate(
-            ["Timeline", "By Country", "Influence Graph", "World Map", "Statistics"],
-            start=1,
-        ):
-            act = QAction(f"{label}  (Ctrl+{idx})", self)
-            act.triggered.connect(lambda checked, i=idx - 1: self.tabs.setCurrentIndex(i))
+        tab_items = [
+            ("Timeline",         "tab_timeline", TAB_TIMELINE),
+            ("By Country",       "tab_country",  TAB_COUNTRY),
+            ("Influence Graph",  "tab_graph",    TAB_GRAPH),
+            ("World Map",        "tab_map",      TAB_MAP),
+            ("Statistics",       "tab_stats",    TAB_STATS),
+        ]
+        for label, action_id, index in tab_items:
+            act = QAction(self._menu_label(label, action_id), self)
+            act.triggered.connect(lambda checked, i=index: self.tabs.setCurrentIndex(i))
             view_menu.addAction(act)
 
         # ── Help ──────────────────────────────────────────────────────────
         help_menu = root.addMenu("  Help")
         help_menu.setStyleSheet(qss)
 
-        act_sc = QAction("Keyboard Shortcuts…", self)
-        act_sc.triggered.connect(lambda: ShortcutsDialog(self).exec())
+        act_sc = QAction(self._menu_label("Keyboard Shortcuts…", "shortcuts"), self)
+        act_sc.triggered.connect(self._open_shortcuts_dialog)
         help_menu.addAction(act_sc)
 
         help_menu.addSeparator()
@@ -496,13 +526,15 @@ class MainWindow(QMainWindow):
         self.btn_view = QPushButton("👁  View")
         self.btn_view.clicked.connect(self._on_view_philosopher)
         self.btn_view.setEnabled(False)
-        self.btn_view.setToolTip("Open detail view")
+        self.btn_view.setToolTip(
+            f"Open detail view  ({self.shortcuts.display('view')})")
         row1.addWidget(self.btn_view)
 
         self.btn_edit = QPushButton("✏  Edit")
         self.btn_edit.clicked.connect(self._on_edit_philosopher)
         self.btn_edit.setEnabled(False)
-        self.btn_edit.setToolTip("Edit selected philosopher")
+        self.btn_edit.setToolTip(
+            f"Edit selected philosopher  ({self.shortcuts.display('edit')})")
         row1.addWidget(self.btn_edit)
 
         self.btn_delete = QPushButton("✕")
@@ -510,14 +542,17 @@ class MainWindow(QMainWindow):
         self.btn_delete.setFixedWidth(34)
         self.btn_delete.clicked.connect(self._on_delete_philosopher)
         self.btn_delete.setEnabled(False)
-        self.btn_delete.setToolTip("Delete selected philosopher  (Delete key)")
+        self.btn_delete.setToolTip(
+            f"Delete selected philosopher  ({self.shortcuts.display('delete')})")
         row1.addWidget(self.btn_delete)
         act_layout.addLayout(row1)
 
         self.btn_compare = QPushButton("⇆  Compare")
         self.btn_compare.clicked.connect(self._on_compare)
         self.btn_compare.setEnabled(False)
-        self.btn_compare.setToolTip("Compare two selected philosophers side-by-side")
+        self.btn_compare.setToolTip(
+            "Compare two selected philosophers side-by-side  "
+            f"({self.shortcuts.display('compare')})")
         act_layout.addWidget(self.btn_compare)
 
         layout.addWidget(actions)
@@ -855,6 +890,35 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Import Complete", msg)
         else:
             QMessageBox.warning(self, "Import Failed", msg)
+
+    # ── Shortcuts ──────────────────────────────────────────────────────────────
+
+    def _open_shortcuts_dialog(self):
+        """Open the editable shortcut customiser.
+
+        Edits apply live and persist as they happen, so once the dialog closes
+        we only need to refresh the hints shown in the menu and tooltips."""
+        ShortcutsDialog(self.shortcuts, parent=self).exec()
+        self._refresh_shortcut_labels()
+
+    def _refresh_shortcut_labels(self):
+        """Rebuild the dropdown menu and tooltips so their binding hints match
+        whatever the user just customised."""
+        old_menu = self._logo_btn.menu()
+        self._logo_btn.setMenu(self._build_app_menu())
+        if old_menu is not None:
+            old_menu.deleteLater()
+        self.btn_add.setToolTip(
+            f"Add a new philosopher  ({self.shortcuts.display('add')})")
+        self.btn_view.setToolTip(
+            f"Open detail view  ({self.shortcuts.display('view')})")
+        self.btn_edit.setToolTip(
+            f"Edit selected philosopher  ({self.shortcuts.display('edit')})")
+        self.btn_delete.setToolTip(
+            f"Delete selected philosopher  ({self.shortcuts.display('delete')})")
+        self.btn_compare.setToolTip(
+            "Compare two selected philosophers side-by-side  "
+            f"({self.shortcuts.display('compare')})")
 
     # ── View helpers ──────────────────────────────────────────────────────────
 
