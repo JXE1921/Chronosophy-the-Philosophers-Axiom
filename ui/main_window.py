@@ -14,8 +14,8 @@ from PyQt6.QtWidgets import (
     QLabel, QFrame, QMessageBox, QSizePolicy, QFileDialog,
     QMenuBar, QMenu
 )
-from PyQt6.QtCore import Qt, QSize, QSettings, QTimer, QTime, pyqtSlot
-from PyQt6.QtGui import QColor, QFont, QIcon, QAction
+from PyQt6.QtCore import Qt, QSize, QSettings, QTimer, QTime, QEvent, pyqtSlot
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QAction
 
 import database as db
 from database import Philosopher, search_philosophers, delete_philosopher, get_all_countries
@@ -33,6 +33,7 @@ from ui.statistics_view import StatisticsView
 from ui.search_bar import SearchBar
 from ui.philosopher_form import PhilosopherFormDialog
 from ui.detail_dialog import DetailDialog
+from ui.quote_dialog import QuoteDialog
 from ui.comparison_dialog import ComparisonDialog
 from ui.about_dialog import AboutDialog
 from ui.shortcuts_dialog import ShortcutsDialog
@@ -161,6 +162,10 @@ class MainWindow(QMainWindow):
         # (inline styles have higher CSS specificity than the app stylesheet,
         # so they must be regenerated separately on every scale change)
         self._apply_scaled_styles(self._ui_scale)
+        # Favourite-quote cards carry inline-scaled fonts that the QListWidget
+        # stylesheet can't reach, so rebuild them when the zoom level changes.
+        if self._current_filters[4] and hasattr(self, 'philosopher_list'):
+            self._rebuild_favourites_keep_selection()
         if persist and self._settings:
             self._settings.setValue("uiScale", self._ui_scale)
 
@@ -512,6 +517,14 @@ class MainWindow(QMainWindow):
         )
         self.philosopher_list.itemDoubleClicked.connect(self._on_list_double_click)
         self.philosopher_list.itemSelectionChanged.connect(self._on_selection_changed)
+        # Favourite cards are sized for the width at build time; rebuild them
+        # (debounced) when the sidebar is resized so the elision/heights track
+        # the live width. Only active while the favourites filter is on.
+        self.philosopher_list.installEventFilter(self)
+        self._fav_resize_timer = QTimer(self)
+        self._fav_resize_timer.setSingleShot(True)
+        self._fav_resize_timer.setInterval(160)
+        self._fav_resize_timer.timeout.connect(self._rebuild_favourites_keep_selection)
         layout.addWidget(self.philosopher_list, stretch=1)
 
         actions = QWidget()
@@ -620,17 +633,213 @@ class MainWindow(QMainWindow):
         self._refresh_country_dropdown()
 
     def _refresh_list(self):
+        favs_only = self._current_filters[4]
         self.philosopher_list.blockSignals(True)
         self.philosopher_list.clear()
-        for p in self._philosophers:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, p.id)
-            item.setText(f"{p.name}\n{p.lifespan_label}  ·  {p.birth_country}")
-            item.setForeground(QColor(TEXT_PRI))
-            self.philosopher_list.addItem(item)
-        self.count_lbl.setText(str(len(self._philosophers)))
+
+        if favs_only:
+            self._refresh_list_favourites()
+        else:
+            if hasattr(self, '_sidebar_title_lbl'):
+                self._sidebar_title_lbl.setText("PHILOSOPHERS")
+            for p in self._philosophers:
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, p.id)
+                item.setText(f"{p.name}\n{p.lifespan_label}  ·  {p.birth_country}")
+                item.setForeground(QColor(TEXT_PRI))
+                self.philosopher_list.addItem(item)
+            self.count_lbl.setText(str(len(self._philosophers)))
+
         self.philosopher_list.blockSignals(False)
         self._on_selection_changed()
+
+    def _refresh_list_favourites(self):
+        """Render the sidebar as favourite-quote cards: the quote itself is shown
+        prominently with the philosopher's name in smaller text beneath it.
+        One card per favourited quote (a philosopher may have several)."""
+        if hasattr(self, '_sidebar_title_lbl'):
+            self._sidebar_title_lbl.setText("FAVOURITES")
+
+        # Width actually available to the quote text inside a card. Reserve the
+        # list padding, item padding, card margins and a possible scrollbar
+        # *generously* so the rendered lines can never be wider than the label —
+        # an over-wide line would clip with no ellipsis. The quote label uses
+        # explicit line breaks (word-wrap off), so this width alone determines
+        # the layout and there is no measure-vs-render mismatch.
+        vw = self.philosopher_list.viewport().width()
+        if vw < 80:
+            vw = 248
+        # vw already excludes a visible scrollbar; reserve item padding (~24),
+        # card margins (20) and a slack/scrollbar allowance (~16) on top.
+        label_w = max(120, vw - 60)
+
+        count = 0
+        for p in self._philosophers:
+            for q in p.quotes:
+                if not q.is_favourite:
+                    continue
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, p.id)
+                # Stash the full quote + author so a double-click can open the
+                # focused quote window (the card itself only shows a short preview).
+                item.setData(Qt.ItemDataRole.UserRole + 1, (q.text, p.name))
+
+                card = self._make_favourite_card(q.text, p.name, label_w)
+                # Height is deterministic (fixed line count, no wrapping); reserve
+                # the list item's own vertical padding so nothing is clipped.
+                height = card.sizeHint().height() + 16
+
+                item.setSizeHint(QSize(vw, height))
+                self.philosopher_list.addItem(item)
+                self.philosopher_list.setItemWidget(item, card)
+                count += 1
+
+        self.count_lbl.setText(str(count))
+
+    def eventFilter(self, obj, event):
+        """Rebuild the favourite cards (debounced) when the sidebar list is
+        resized, so previews and row heights track the live column width."""
+        if (obj is getattr(self, 'philosopher_list', None)
+                and event.type() == QEvent.Type.Resize
+                and self._current_filters[4]):
+            self._fav_resize_timer.start()
+        return super().eventFilter(obj, event)
+
+    def _rebuild_favourites_keep_selection(self):
+        """Rebuild the favourites list (e.g. after zoom or resize) while keeping
+        the current selection — _refresh_list() clears the QListWidget."""
+        if not self._current_filters[4] or not hasattr(self, 'philosopher_list'):
+            return
+        rows = [self.philosopher_list.row(it)
+                for it in self.philosopher_list.selectedItems()]
+        self._refresh_list()
+        n = self.philosopher_list.count()
+        self.philosopher_list.blockSignals(True)
+        for r in rows:
+            if 0 <= r < n:
+                self.philosopher_list.item(r).setSelected(True)
+        self.philosopher_list.blockSignals(False)
+        self._on_selection_changed()
+
+    # Favourite cards preview at most this many lines before eliding with "…".
+    # Three lines lets short/medium quotes show in full in the narrow sidebar
+    # while long ones are trimmed at a word boundary with an ellipsis.
+    _FAV_CARD_LINES = 3
+
+    def _make_favourite_card(self, quote_text: str, name: str, label_w: int) -> QWidget:
+        """Build a small card showing a favourited quote with the philosopher's
+        name in smaller text underneath. The quote is sized for comfortable
+        reading at the default zoom and elided (with a trailing ellipsis) if it's
+        long. Word-wrap is OFF — _elide_quote already inserts explicit line breaks
+        that fit `label_w`, so the rendered layout exactly matches what was
+        measured and nothing can re-wrap and clip.
+        Mouse-transparent so the QListWidget still drives selection / double-click."""
+        s = self._ui_scale
+
+        def px(base: float) -> int:
+            return max(7, round(base * s))
+
+        quote_px = px(15)
+        name_px = px(11)
+
+        # Match the metrics font to the rendered label so elision lands accurately.
+        qfont = QFont("Georgia")
+        qfont.setPixelSize(quote_px)
+        qfont.setItalic(True)
+        display = self._elide_quote(quote_text, label_w, qfont, self._FAV_CARD_LINES)
+        n_lines = display.count("\n") + 1
+
+        card = QWidget()
+        card.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        card.setStyleSheet("background: transparent; border: none;")
+
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 9, 10, 9)
+        v.setSpacing(6)
+
+        lbl_quote = QLabel(display)
+        lbl_quote.setWordWrap(False)
+        # Reserve exactly the space the explicit lines need, so the row height is
+        # deterministic and the last line is never clipped.
+        lbl_quote.setFixedHeight(n_lines * QFontMetrics(qfont).lineSpacing())
+        lbl_quote.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lbl_quote.setStyleSheet(f"""
+            color: {TEXT_PRI};
+            font-family: 'Georgia', serif;
+            font-size: {quote_px}px;
+            font-style: italic;
+            background: transparent;
+            border: none;
+        """)
+        v.addWidget(lbl_quote)
+
+        lbl_name = QLabel(f"— {name}")
+        lbl_name.setAlignment(Qt.AlignmentFlag.AlignRight)
+        lbl_name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lbl_name.setStyleSheet(f"""
+            color: {GOLD};
+            font-family: 'Georgia', serif;
+            font-size: {name_px}px;
+            letter-spacing: 0.5px;
+            background: transparent;
+            border: none;
+        """)
+        v.addWidget(lbl_name)
+
+        return card
+
+    def _elide_quote(self, text: str, width: int, font: QFont, max_lines: int) -> str:
+        """Wrap `text` (wrapped in curly quotes) to at most `max_lines` lines at
+        the given pixel width. If it overflows, the final line is trimmed at a
+        word boundary and an ellipsis appended — e.g. “Science is organised…”.
+        Returns the display string with explicit newlines."""
+        fm = QFontMetrics(font)
+        ellipsis = "…"
+
+        def fit(line: str) -> str:
+            # Guarantee a single line never exceeds the width — handles a word
+            # longer than the column (incl. ordinary words at very high zoom),
+            # which word-wrap alone cannot break and the QLabel would hard-clip.
+            if fm.horizontalAdvance(line) <= width:
+                return line
+            return fm.elidedText(line, Qt.TextElideMode.ElideRight, width)
+
+        inner = " ".join(text.split())                      # collapse whitespace
+        full = inner if inner.startswith("“") else f"“{inner}”"
+
+        # Greedy word wrap into full lines.
+        lines, cur = [], ""
+        for word in full.split(" "):
+            trial = word if not cur else f"{cur} {word}"
+            if not cur or fm.horizontalAdvance(trial) <= width:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = word
+        if cur:
+            lines.append(cur)
+
+        if len(lines) <= max_lines:
+            return "\n".join(fit(ln) for ln in lines)
+
+        # Overflow: keep the first lines and rebuild the last one word-by-word,
+        # leaving room for the ellipsis so we never cut through a word.
+        kept = [fit(ln) for ln in lines[:max_lines - 1]]
+        remainder = " ".join(lines[max_lines - 1:])
+        budget = width - fm.horizontalAdvance(ellipsis)
+        last = ""
+        for word in remainder.split(" "):
+            trial = word if not last else f"{last} {word}"
+            if fm.horizontalAdvance(trial) <= budget:
+                last = trial
+            else:
+                break
+        if last:
+            kept.append(last.rstrip() + ellipsis)
+        else:
+            # Pathological single very long word — fall back to character elision.
+            kept.append(fm.elidedText(remainder, Qt.TextElideMode.ElideRight, width))
+        return "\n".join(kept)
 
     def _refresh_views(self):
         self.timeline_view.set_philosophers(self._philosophers)
@@ -652,10 +861,20 @@ class MainWindow(QMainWindow):
     def _on_selection_changed(self):
         items = self.philosopher_list.selectedItems()
         count = len(items)
-        self.btn_view.setEnabled(count == 1)
-        self.btn_edit.setEnabled(count == 1)
-        self.btn_delete.setEnabled(count >= 1)
-        self.btn_compare.setEnabled(count == 2)
+        # In favourites mode each row is a quote, not a philosopher. The
+        # philosopher-level actions (Edit / Delete / Compare) would act on the
+        # whole philosopher — misleading and, for Delete, destructive — so they
+        # are disabled there; View opens the focused quote window instead.
+        if self._current_filters[4]:
+            self.btn_view.setEnabled(count == 1)
+            self.btn_edit.setEnabled(False)
+            self.btn_delete.setEnabled(False)
+            self.btn_compare.setEnabled(False)
+        else:
+            self.btn_view.setEnabled(count == 1)
+            self.btn_edit.setEnabled(count == 1)
+            self.btn_delete.setEnabled(count >= 1)
+            self.btn_compare.setEnabled(count == 2)
 
     def _selected_philosopher_id(self) -> int | None:
         items = self.philosopher_list.selectedItems()
@@ -666,6 +885,14 @@ class MainWindow(QMainWindow):
                 for item in self.philosopher_list.selectedItems()]
 
     def _on_list_double_click(self, item: QListWidgetItem):
+        # In favourites mode each row is a quote, so double-clicking opens the
+        # focused quote window rather than the full philosopher detail view.
+        if self._current_filters[4]:
+            payload = item.data(Qt.ItemDataRole.UserRole + 1)
+            if payload:
+                quote_text, author = payload
+                QuoteDialog(quote_text, author, parent=self).exec()
+                return
         self._show_detail(item.data(Qt.ItemDataRole.UserRole))
 
     @pyqtSlot(int)
@@ -754,7 +981,13 @@ class MainWindow(QMainWindow):
 
     def _on_favourite_toggled(self, *args):
         """Refresh the philosopher list and stats."""
-        self._refresh_list()
+        # In favourites mode a quote may have just been un-favourited; reload
+        # from the DB (not just re-render the stale in-memory list) so it leaves
+        # the sidebar instead of lingering as a ghost card.
+        if self._current_filters[4]:
+            self._load_data()
+        else:
+            self._refresh_list()
         if self.tabs.currentIndex() == TAB_STATS:
             self.stats_view.refresh()
 
@@ -768,7 +1001,19 @@ class MainWindow(QMainWindow):
             self.stats_view.refresh()
 
     def _on_view_philosopher(self):
-        pid = self._selected_philosopher_id()
+        items = self.philosopher_list.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        # In favourites mode "View" opens the focused quote window, matching the
+        # double-click behaviour, rather than the full philosopher detail view.
+        if self._current_filters[4]:
+            payload = item.data(Qt.ItemDataRole.UserRole + 1)
+            if payload:
+                quote_text, author = payload
+                QuoteDialog(quote_text, author, parent=self).exec()
+                return
+        pid = item.data(Qt.ItemDataRole.UserRole)
         if pid:
             self._show_detail(pid)
 

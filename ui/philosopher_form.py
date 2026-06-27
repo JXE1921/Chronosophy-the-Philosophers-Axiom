@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QFrame, QMessageBox
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QGuiApplication
 from database import Philosopher, add_philosopher, update_philosopher
 from styles import (
     GOLD, GOLD_DIM, GOLD_LIGHT, GOLD_MUTED, BG_BASE, BG_SURFACE, BG_RAISED,
@@ -29,9 +30,16 @@ class PhilosopherFormDialog(QDialog):
         self.quote_fields: list[QTextEdit] = []
 
         self.setWindowTitle("Edit Philosopher" if self.is_edit else "Add Philosopher")
-        self.setMinimumWidth(600)
-        self.setMinimumHeight(680)
-        self.resize(660, 800)   # sensible opening size — user can still resize freely
+        # Keep the dialog comfortably within smaller laptop screens (e.g. 14").
+        # All the form content lives inside a scroll area, so a shorter window
+        # simply scrolls rather than cutting anything off.
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(440)
+        screen = (parent.screen() if parent is not None else None) or QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry()
+        width = min(600, avail.width() - 60)
+        height = min(680, avail.height() - 80)
+        self.resize(width, height)   # opening size, capped to fit the current screen
         self.setModal(True)
         # Inherit the app-wide icon so every dialog shows it in the title bar
         if parent and not parent.windowIcon().isNull():
