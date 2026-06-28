@@ -1,20 +1,34 @@
 """
-ui/world_map.py — Stylised world map view.
-Custom QPainter implementation (no QWebEngineView / folium dependency).
+ui/world_map.py — Accurate world map view (offline, pure QPainter).
 
-Continents are drawn as simplified painter paths (deliberately abstract — the
-goal is atmosphere, not cartographic accuracy). Country dots are positioned
-using approximate lat/lng for the eight seed countries plus a generous fallback
-table for likely additions. Click a dot to filter to that country.
+Country outlines come from a bundled, simplified Natural Earth 50m dataset
+(assets/world_countries.json — public domain), so coastlines are geographically
+accurate (the UK, small states and islands all exist) without any web / tile
+dependency. Geometry is projected with an equirectangular projection and drawn
+through a single zoom/pan transform, so the whole map moves together.
+
+Level of detail:
+  · Zoomed out  → one aggregate dot per birth-country showing the total count.
+  · Zoomed in   → the aggregate dots cross-fade into per-city markers placed at
+                  the philosopher's actual birth city. A city with one
+                  philosopher shows their initials (as in the Graph view); a city
+                  with several shows a count badge that "spiders" open on click to
+                  reveal each philosopher's initials. Clicking a philosopher
+                  marker opens their detail view.
 """
+
+import os
+import sys
+import json
+import math
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QToolTip, QPushButton
 )
-from PyQt6.QtCore import Qt, QPointF, QRectF, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt, QPointF, QRectF, QPoint, QEvent, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QFontMetrics,
-    QCursor, QRadialGradient
+    QCursor, QRadialGradient, QLinearGradient
 )
 from database import Philosopher
 from styles import (
@@ -24,10 +38,10 @@ from styles import (
 )
 
 
-# Approximate (lat, lng) coordinates for countries that appear in the seed data
-# plus a broad fallback set for any additions users might make.
+# Aggregate (zoomed-out) dot positions, keyed by the app's birth_country values.
+# Kept curated because the app uses names Natural Earth has no polygon for
+# (England, Scotland, Persia, …); the dot just needs a sensible anchor.
 COUNTRY_COORDS: dict[str, tuple[float, float]] = {
-    # Seed countries
     "Greece":      (39.0, 22.0),
     "China":       (35.0, 104.0),
     "Germany":     (51.0, 10.5),
@@ -36,7 +50,6 @@ COUNTRY_COORDS: dict[str, tuple[float, float]] = {
     "Spain":       (40.0, -3.5),
     "Netherlands": (52.3, 5.5),
     "Scotland":    (56.8, -4.2),
-    # Common additions
     "Italy":       (42.8, 12.5),
     "Ireland":     (53.4, -8.2),
     "Wales":       (52.4, -3.7),
@@ -73,68 +86,110 @@ COUNTRY_COORDS: dict[str, tuple[float, float]] = {
 }
 
 
-# Simplified continent outlines (lng,lat polygons -> painted via projection).
-# These are deliberately rough; the aim is a recognisable silhouette, not a real
-# basemap. Coordinates from public-domain low-resolution outlines, reduced.
-_CONTINENTS: list[list[tuple[float, float]]] = [
-    # Eurasia (highly simplified)
-    [(-10, 36), (-9, 43), (-1, 49), (2, 51), (8, 53), (13, 55), (18, 59),
-    (24, 65), (30, 70), (40, 72), (60, 75), (80, 73), (105, 73), (140, 72),
-    (160, 70), (170, 67), (175, 65), (170, 60), (160, 55), (145, 50),
-    (140, 45), (135, 40), (125, 35), (120, 30), (110, 22), (108, 17),
-    (105, 12), (100, 8), (95, 12), (88, 15), (82, 22), (78, 21), (72, 22),
-    (65, 25), (58, 25), (52, 27), (48, 29), (44, 35), (40, 38), (35, 36),
-    (28, 35), (22, 36), (18, 37), (12, 39), (5, 38), (-2, 36), (-9, 36)],
+# Birth-city coordinates (lat, lng) for the seed philosophers. Historical places
+# are mapped to their real site (Königsberg→Kaliningrad, La Haye en Touraine→
+# Descartes, Ku County→Luyi County, Henan). User-added cities fall back to the
+# country anchor with a small deterministic offset (see _city_coord).
+CITY_COORDS: dict[str, tuple[float, float]] = {
+    "Athens":              (37.9715, 23.7257),
+    "Stagira":             (40.5917, 23.7946),
+    "Qufu":                (35.5974, 117.0226),
+    "Königsberg":          (54.7104, 20.5101),
+    "La Haye en Touraine": (46.9744, 0.6986),
+    "Röcken":              (51.2408, 12.1161),
+    "Wrington":            (51.3610, -2.7630),
+    "Paris":               (48.8566, 2.3522),
+    "Córdoba":             (37.8882, -4.7794),
+    "Amsterdam":           (52.3683, 4.9032),
+    "London":              (51.5189, -0.0824),
+    "Ku County":           (33.8600, 115.4900),
+    "Edinburgh":           (55.9533, -3.1883),
+}
 
-    # Africa
-    [(-17, 21), (-15, 28), (-7, 32), (0, 33), (10, 31), (20, 30), (30, 31),
-    (35, 24), (40, 16), (43, 11), (51, 11), (43, 0), (40, -10), (38, -16),
-    (35, -22), (30, -25), (25, -33), (20, -34), (15, -29), (10, -22),
-    (8, -10), (10, -3), (5, 4), (-2, 5), (-8, 5), (-13, 12), (-17, 14)],
 
-    # North America
-    [(-160, 65), (-140, 70), (-120, 70), (-100, 73), (-80, 73), (-65, 60),
-    (-55, 50), (-65, 45), (-72, 40), (-78, 35), (-80, 28), (-82, 25),
-    (-90, 20), (-100, 17), (-105, 22), (-115, 30), (-120, 35), (-125, 45),
-    (-130, 55), (-145, 60), (-160, 60), (-165, 65)],
+# ── Bundled geometry loading (cached process-wide) ───────────────────────────
 
-    # South America
-    [(-80, 12), (-72, 11), (-62, 8), (-52, 5), (-42, -5), (-38, -15),
-    (-40, -22), (-45, -30), (-58, -38), (-65, -50), (-70, -55), (-72, -50),
-    (-75, -40), (-77, -28), (-78, -15), (-80, -5), (-82, 5), (-80, 12)],
+_GEOMETRY: list[dict] | None = None
 
-    # Australia
-    [(115, -22), (122, -20), (130, -13), (138, -12), (145, -15), (152, -25),
-    (153, -32), (148, -38), (140, -38), (130, -32), (120, -34), (115, -30),
-    (115, -22)],
-]
+
+def _asset_path(rel: str) -> str:
+    """Resolve a bundled asset both from source and inside a PyInstaller bundle."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        p = os.path.join(base, rel)
+        if os.path.exists(p):
+            return p
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, rel)
+
+
+def _load_geometry() -> list[dict]:
+    """Load simplified country polygons once; tolerate a missing asset."""
+    global _GEOMETRY
+    if _GEOMETRY is None:
+        try:
+            with open(_asset_path("assets/world_countries.json"), encoding="utf-8") as fh:
+                _GEOMETRY = json.load(fh).get("countries", [])
+        except Exception:
+            _GEOMETRY = []
+    return _GEOMETRY
+
+
+def _initials(name: str) -> str:
+    """Two-letter initials — identical convention to the Graph view."""
+    return "".join(part[0].upper() for part in name.split() if part)[:2] or "?"
 
 
 class WorldMapCanvas(QWidget):
     country_clicked = pyqtSignal(str)
+    philosopher_clicked = pyqtSignal(int)
 
-    _DRAG_THRESHOLD = 6    # px — distinguishes tap-on-dot from drag-to-pan
+    _DRAG_THRESHOLD = 6      # px — distinguishes tap from drag-to-pan
+    LAT_LIMIT = 83           # projection clamps latitude to ±this
+    FADE_START = 1.9         # zoom at which city markers begin to appear
+    FADE_END = 2.7           # zoom at which only city markers show
+    MAX_ZOOM = 16.0
+    MIN_ZOOM = 0.5
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._philosophers: list[Philosopher] = []
         self._country_counts: dict[str, int] = {}
+        self._city_entries: list[dict] = []
+        self._city_by_key: dict[tuple, dict] = {}
+
+        # Cached base-projected land path (rebuilt only when the widget resizes)
+        self._base_path: QPainterPath | None = None
+        self._base_path_size: tuple[int, int] = (0, 0)
+
+        # Hit zones, rebuilt every paint
+        self._country_hits: list[tuple[QPointF, float, str]] = []
+        self._cluster_hits: list[tuple[QPointF, float, tuple]] = []
+        self._philosopher_hits: list[tuple[QPointF, float, Philosopher]] = []
+
+        # Hover / interaction state
         self._hover_country: str | None = None
-        self._dot_hits: list[tuple[QPointF, float, str]] = []
-        # ── Pan / zoom state ─────────────────────────────────────────────────
+        self._hover_cluster: tuple | None = None
+        self._hover_phil_id: int | None = None
+        self._expanded_city: tuple | None = None     # spidered-open cluster
+
+        # Pan / zoom state
         self._zoom_factor: float = 1.0
         self._pan_offset: QPointF = QPointF(0.0, 0.0)
-        self._pan_anchor: QPoint | None = None       # left-drag pan anchor
-        self._press_dot_country: str | None = None   # dot the user tapped on
-        self._press_dot_pos: QPoint | None = None    # where the tap happened
-        # ─────────────────────────────────────────────────────────────────────
+        self._pan_anchor: QPoint | None = None
+        self._press_action: tuple | None = None      # ('country'|'phil'|'cluster', payload)
+        self._press_pos: QPoint | None = None
+
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(700, 380)
 
+    # ── Public API ───────────────────────────────────────────────────────────
+
     def reset_view(self):
         self._zoom_factor = 1.0
         self._pan_offset = QPointF(0.0, 0.0)
+        self._expanded_city = None
         self.update()
 
     def set_philosophers(self, philosophers: list[Philosopher]):
@@ -144,49 +199,89 @@ class WorldMapCanvas(QWidget):
             if p.birth_country:
                 counts[p.birth_country] = counts.get(p.birth_country, 0) + 1
         self._country_counts = counts
+        self._build_city_entries()
+        self._expanded_city = None
         self.update()
 
-    # ── Projection: lng/lat → canvas x/y ────────────────────────────────────
+    def _build_city_entries(self):
+        groups: dict[tuple, list[Philosopher]] = {}
+        for p in self._philosophers:
+            if not (p.birth_city or p.birth_country):
+                continue
+            key = (p.birth_country, p.birth_city)
+            groups.setdefault(key, []).append(p)
+        entries, by_key = [], {}
+        for (country, city), phils in groups.items():
+            entry = {
+                "key": (country, city), "country": country, "city": city,
+                "phils": phils, "coord": self._city_coord(country, city),
+            }
+            entries.append(entry)
+            by_key[(country, city)] = entry
+        # Draw busier clusters first so single-initial markers sit on top
+        entries.sort(key=lambda e: -len(e["phils"]))
+        self._city_entries = entries
+        self._city_by_key = by_key
+
+    def _city_coord(self, country: str, city: str) -> tuple[float, float] | None:
+        coord = CITY_COORDS.get(city)
+        if coord:
+            return coord
+        base = COUNTRY_COORDS.get(country)
+        if base:
+            # Deterministic offset so distinct unknown cities don't stack.
+            seed = sum(ord(ch) for ch in (city or country))
+            dlat = ((seed % 100) / 100 - 0.5) * 1.6
+            dlng = (((seed // 100) % 100) / 100 - 0.5) * 1.6
+            return (base[0] + dlat, base[1] + dlng)
+        return None
+
+    # ── Projection ───────────────────────────────────────────────────────────
+
+    def _base_project(self, lng: float, lat: float) -> QPointF:
+        """Equirectangular projection into base (unzoomed) canvas coordinates."""
+        margin = 30
+        w = self.width() - 2 * margin
+        h = self.height() - 2 * margin
+        lat = max(-self.LAT_LIMIT, min(self.LAT_LIMIT, lat))
+        bx = margin + ((lng + 180) / 360) * w
+        by = margin + ((self.LAT_LIMIT - lat) / (2 * self.LAT_LIMIT)) * h
+        return QPointF(bx, by)
 
     def _project(self, lng: float, lat: float) -> QPointF:
-        """Equirectangular projection, then apply current zoom + pan.
-
-        All painted geometry goes through this function, so pan/zoom moves
-        continents, grid lines, and country dots together perfectly.
-        """
-        margin_x = 30
-        margin_y = 30
-        w = self.width() - 2 * margin_x
-        h = self.height() - 2 * margin_y
-        lat = max(-75, min(75, lat))
-        # Base (unzoomed) screen position
-        bx = margin_x + ((lng + 180) / 360) * w
-        by = margin_y + ((75 - lat) / 150) * h
-        # Zoom is centred on the canvas centre, then pan is added
-        cx = self.width() / 2
-        cy = self.height() / 2
-        x = cx + (bx - cx) * self._zoom_factor + self._pan_offset.x()
-        y = cy + (by - cy) * self._zoom_factor + self._pan_offset.y()
+        """Base projection + current zoom (about centre) + pan."""
+        b = self._base_project(lng, lat)
+        cx, cy = self.width() / 2, self.height() / 2
+        x = cx + (b.x() - cx) * self._zoom_factor + self._pan_offset.x()
+        y = cy + (b.y() - cy) * self._zoom_factor + self._pan_offset.y()
         return QPointF(x, y)
 
+    def _lod_t(self) -> float:
+        """0.0 = country dots only, 1.0 = city markers only (cross-fade between)."""
+        z = self._zoom_factor
+        span = self.FADE_END - self.FADE_START
+        return max(0.0, min(1.0, (z - self.FADE_START) / span))
+
+    def _city_mode(self) -> bool:
+        return self._lod_t() >= 0.5
+
     def _zoom_to(self, factor: float, anchor: QPointF):
-        """Zoom by `factor` keeping the screen point `anchor` stationary."""
+        """Zoom by `factor`, keeping the screen point `anchor` stationary."""
         old_z = self._zoom_factor
-        new_z = max(0.5, min(8.0, old_z * factor))
-        # Derive the "base canvas" position under the anchor before the zoom
-        cx = self.width() / 2
-        cy = self.height() / 2
+        new_z = max(self.MIN_ZOOM, min(self.MAX_ZOOM, old_z * factor))
+        cx, cy = self.width() / 2, self.height() / 2
         base_x = (anchor.x() - cx - self._pan_offset.x()) / old_z + cx
         base_y = (anchor.y() - cy - self._pan_offset.y()) / old_z + cy
-        # After the zoom, the same base point must map back to the same screen pos
         self._pan_offset = QPointF(
             anchor.x() - cx - (base_x - cx) * new_z,
             anchor.y() - cy - (base_y - cy) * new_z,
         )
         self._zoom_factor = new_z
+        if not self._city_mode():
+            self._expanded_city = None
         self.update()
 
-    # ── Painting ────────────────────────────────────────────────────────────
+    # ── Painting ─────────────────────────────────────────────────────────────
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -194,220 +289,378 @@ class WorldMapCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.fillRect(self.rect(), QColor(MAP_OCEAN))
 
+        self._country_hits.clear()
+        self._cluster_hits.clear()
+        self._philosopher_hits.clear()
+
         self._paint_grid(painter)
-        self._paint_continents(painter)
-        self._paint_country_dots(painter)
-        self._paint_legend(painter)
-        painter.end()
+        self._paint_land(painter)
 
-    def _paint_grid(self, painter: QPainter):
-        """Faint lat/lng grid for atmosphere."""
-        pen = QPen(QColor(BORDER), 0.5, Qt.PenStyle.DotLine)
-        painter.setPen(pen)
-        # Meridians every 30°
-        for lng in range(-180, 181, 30):
-            p1 = self._project(lng, -75)
-            p2 = self._project(lng, 75)
-            painter.drawLine(p1, p2)
-        # Parallels every 30°
-        for lat in range(-60, 61, 30):
-            p1 = self._project(-180, lat)
-            p2 = self._project(180, lat)
-            painter.drawLine(p1, p2)
-        # Equator highlight
-        pen = QPen(QColor(BORDER_LT), 0.7, Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        p1 = self._project(-180, 0)
-        p2 = self._project(180, 0)
-        painter.drawLine(p1, p2)
-
-    def _paint_continents(self, painter: QPainter):
-        """Draw the simplified continent silhouettes."""
-        path = QPainterPath()
-        for poly in _CONTINENTS:
-            sub = QPainterPath()
-            for i, (lng, lat) in enumerate(poly):
-                pt = self._project(lng, lat)
-                if i == 0:
-                    sub.moveTo(pt)
-                else:
-                    sub.lineTo(pt)
-            sub.closeSubpath()
-            path.addPath(sub)
-
-        painter.setBrush(QBrush(QColor(MAP_LAND)))
-        painter.setPen(QPen(QColor(MAP_LAND_BORDER), 1.0))
-        painter.drawPath(path)
-
-    def _paint_country_dots(self, painter: QPainter):
-        """Render a glowing dot for each country with at least one philosopher."""
-        self._dot_hits.clear()
         if not self._country_counts:
             painter.setPen(QColor(TEXT_DIM))
             painter.setFont(QFont("Georgia", 11, QFont.Weight.Normal, True))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                            "No philosophers loaded.")
+                             "No philosophers loaded.")
+            painter.end()
             return
 
-        max_count = max(self._country_counts.values())
-        font = QFont("Georgia", 9, QFont.Weight.Normal)
-        fm = QFontMetrics(font)
-        painter.setFont(font)
+        t = self._lod_t()
+        if t < 1.0:
+            self._paint_country_dots(painter, 1.0 - t)
+        if t > 0.0:
+            self._paint_city_markers(painter, t)
+        painter.setOpacity(1.0)
 
-        for country, count in sorted(self._country_counts.items(),
-                                    key=lambda kv: -kv[1]):
+        self._paint_legend(painter)
+        painter.end()
+
+    def _paint_grid(self, painter: QPainter):
+        pen = QPen(QColor(BORDER), 0.5, Qt.PenStyle.DotLine)
+        painter.setPen(pen)
+        for lng in range(-180, 181, 30):
+            painter.drawLine(self._project(lng, -self.LAT_LIMIT),
+                             self._project(lng, self.LAT_LIMIT))
+        for lat in range(-60, 61, 30):
+            painter.drawLine(self._project(-180, lat), self._project(180, lat))
+
+    def _build_base_path(self):
+        path = QPainterPath()
+        for country in _load_geometry():
+            for ring in country["polys"]:
+                for i, (lng, lat) in enumerate(ring):
+                    pt = self._base_project(lng, lat)
+                    if i == 0:
+                        path.moveTo(pt)
+                    else:
+                        path.lineTo(pt)
+                path.closeSubpath()
+        self._base_path = path
+        self._base_path_size = (self.width(), self.height())
+
+    def _paint_land(self, painter: QPainter):
+        if self._base_path is None or self._base_path_size != (self.width(), self.height()):
+            self._build_base_path()
+        painter.save()
+        cx, cy = self.width() / 2, self.height() / 2
+        z = self._zoom_factor
+        painter.translate(cx * (1 - z) + self._pan_offset.x(),
+                          cy * (1 - z) + self._pan_offset.y())
+        painter.scale(z, z)
+        pen = QPen(QColor(MAP_LAND_BORDER), 1.0)
+        pen.setCosmetic(True)              # 1px borders regardless of zoom
+        painter.setPen(pen)
+        painter.setBrush(QBrush(QColor(MAP_LAND)))
+        painter.drawPath(self._base_path)
+        painter.restore()
+
+    def _on_canvas(self, pt: QPointF) -> bool:
+        m = 80
+        return (-m <= pt.x() <= self.width() + m) and (-m <= pt.y() <= self.height() + m)
+
+    def _paint_country_dots(self, painter: QPainter, alpha: float):
+        painter.setOpacity(alpha)
+        max_count = max(self._country_counts.values())
+        label_font = QFont("Georgia", 9, QFont.Weight.Normal)
+        fm = QFontMetrics(label_font)
+
+        for country, count in sorted(self._country_counts.items(), key=lambda kv: -kv[1]):
             coords = COUNTRY_COORDS.get(country)
             if not coords:
                 continue
             lat, lng = coords
             pt = self._project(lng, lat)
-            # Dot radius scales with count (8..18 px)
             r = 8 + 10 * (count / max_count)
+            is_hover = (country == self._hover_country) and self._city_mode() is False
 
-            is_hover = (country == self._hover_country)
-
-            # Outer glow
             glow_radius = r * 2.4
             grad = QRadialGradient(pt, glow_radius)
             base = QColor(MAP_DOT_HOVER if is_hover else MAP_DOT)
             base.setAlpha(140 if is_hover else 90)
             grad.setColorAt(0.0, base)
-            transparent = QColor(base)
-            transparent.setAlpha(0)
+            transparent = QColor(base); transparent.setAlpha(0)
             grad.setColorAt(1.0, transparent)
-            painter.setBrush(QBrush(grad))
-            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(grad)); painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(pt, glow_radius, glow_radius)
 
-            # Inner dot
-            dot_colour = QColor(MAP_DOT_HOVER) if is_hover else QColor(MAP_DOT)
-            painter.setBrush(QBrush(dot_colour))
+            painter.setBrush(QBrush(QColor(MAP_DOT_HOVER if is_hover else MAP_DOT)))
             painter.setPen(QPen(QColor(GOLD_LIGHT), 1.2))
             painter.drawEllipse(pt, r, r)
 
-            # Count number inside dot
             painter.setPen(QColor("#0C0C0E"))
             painter.setFont(QFont("Georgia", max(8, int(r * 0.7)), QFont.Weight.Bold))
-            text_rect = QRectF(pt.x() - r, pt.y() - r, r * 2, r * 2)
-            painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, str(count))
+            painter.drawText(QRectF(pt.x() - r, pt.y() - r, r * 2, r * 2),
+                             Qt.AlignmentFlag.AlignCenter, str(count))
 
-            # Country label
-            painter.setFont(font)
+            painter.setFont(label_font)
             painter.setPen(QColor(TEXT_PRI if is_hover else TEXT_SEC))
-            label = country
-            lw = fm.horizontalAdvance(label)
-            label_y = pt.y() + r + 14
-            painter.drawText(int(pt.x() - lw / 2), int(label_y), label)
+            lw = fm.horizontalAdvance(country)
+            painter.drawText(int(pt.x() - lw / 2), int(pt.y() + r + 14), country)
 
-            # Store hit zone
-            self._dot_hits.append((pt, r, country))
+            self._country_hits.append((pt, r, country))
+
+    def _paint_city_markers(self, painter: QPainter, alpha: float):
+        painter.setOpacity(alpha)
+        for entry in self._city_entries:
+            coord = entry["coord"]
+            if not coord:
+                continue
+            pt = self._project(coord[1], coord[0])
+            if not self._on_canvas(pt):
+                continue
+            phils = entry["phils"]
+            if self._expanded_city == entry["key"] and len(phils) > 1:
+                self._paint_spider(painter, pt, phils)
+            elif len(phils) == 1:
+                self._paint_phil_marker(painter, pt, phils[0], phils[0].name)
+            else:
+                self._paint_cluster(painter, pt, entry)
+
+    def _paint_phil_marker(self, painter: QPainter, pt: QPointF, p: Philosopher,
+                           label: str, r: float = 15.0):
+        era = QColor(ERA_COLORS.get(p.era, "#4A5E7E"))
+        is_hover = (p.id == self._hover_phil_id)
+
+        if is_hover:
+            ring = QColor(GOLD_LIGHT); ring.setAlpha(180)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(ring, 3))
+            painter.drawEllipse(pt, r + 5, r + 5)
+
+        grad = QLinearGradient(pt.x() - r, pt.y() - r, pt.x() + r, pt.y() + r)
+        grad.setColorAt(0.0, era.lighter(140))
+        grad.setColorAt(1.0, era.darker(140))
+        painter.setBrush(QBrush(grad))
+        painter.setPen(QPen(QColor(GOLD if is_hover else BORDER_LT), 1.4))
+        painter.drawEllipse(pt, r, r)
+
+        painter.setPen(QColor("white"))
+        painter.setFont(QFont("Georgia", max(9, int(r * 0.72)), QFont.Weight.Bold))
+        painter.drawText(QRectF(pt.x() - r, pt.y() - r, r * 2, r * 2),
+                         Qt.AlignmentFlag.AlignCenter, _initials(p.name))
+
+        painter.setPen(QColor(TEXT_PRI if is_hover else TEXT_SEC))
+        painter.setFont(QFont("Georgia", 8, QFont.Weight.Normal))
+        painter.drawText(QRectF(pt.x() - 90, pt.y() + r + 2, 180, 16),
+                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, label)
+
+        self._philosopher_hits.append((pt, r, p))
+
+    def _paint_cluster(self, painter: QPainter, pt: QPointF, entry: dict):
+        n = len(entry["phils"])
+        r = 13 + 2 * min(n, 6)
+        is_hover = (entry["key"] == self._hover_cluster)
+
+        glow_radius = r * 2.2
+        grad = QRadialGradient(pt, glow_radius)
+        base = QColor(MAP_DOT_HOVER if is_hover else MAP_DOT)
+        base.setAlpha(150 if is_hover else 95)
+        grad.setColorAt(0.0, base)
+        transparent = QColor(base); transparent.setAlpha(0)
+        grad.setColorAt(1.0, transparent)
+        painter.setBrush(QBrush(grad)); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(pt, glow_radius, glow_radius)
+
+        painter.setBrush(QBrush(QColor(MAP_DOT_HOVER if is_hover else MAP_DOT)))
+        painter.setPen(QPen(QColor(GOLD_LIGHT), 1.4))
+        painter.drawEllipse(pt, r, r)
+
+        painter.setPen(QColor("#0C0C0E"))
+        painter.setFont(QFont("Georgia", max(9, int(r * 0.75)), QFont.Weight.Bold))
+        painter.drawText(QRectF(pt.x() - r, pt.y() - r, r * 2, r * 2),
+                         Qt.AlignmentFlag.AlignCenter, str(n))
+
+        painter.setPen(QColor(TEXT_PRI if is_hover else TEXT_SEC))
+        painter.setFont(QFont("Georgia", 8, QFont.Weight.Normal))
+        painter.drawText(QRectF(pt.x() - 90, pt.y() + r + 2, 180, 16),
+                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                         f"{entry['city']} · {n}")
+
+        self._cluster_hits.append((pt, r, entry["key"]))
+
+    def _paint_spider(self, painter: QPainter, pt: QPointF, phils: list[Philosopher]):
+        n = len(phils)
+        radius = 30 + 7 * n
+        # connector lines first, so markers sit on top
+        painter.setPen(QPen(QColor(BORDER_LT), 1.0, Qt.PenStyle.SolidLine))
+        spokes = []
+        for i, p in enumerate(phils):
+            ang = math.radians(-90 + i * 360.0 / n)
+            mp = QPointF(pt.x() + radius * math.cos(ang), pt.y() + radius * math.sin(ang))
+            spokes.append((mp, p))
+            painter.drawLine(pt, mp)
+        # small anchor at the city centre
+        painter.setBrush(QBrush(QColor(GOLD_DIM)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(pt, 3, 3)
+        for mp, p in spokes:
+            self._paint_phil_marker(painter, mp, p, p.name, r=14.0)
 
     def _paint_legend(self, painter: QPainter):
-        """Bottom-right legend with total countries / philosophers."""
-        if not self._country_counts:
-            return
+        painter.setOpacity(1.0)
         total_p = sum(self._country_counts.values())
         total_c = len(self._country_counts)
-        text = f"{total_p} philosophers · {total_c} countries · Click a dot to filter"
+        if self._city_mode():
+            hint = "Showing cities · click a cluster to expand · click a marker for details"
+        else:
+            hint = "Ctrl+scroll to zoom in and reveal cities · click a dot to filter"
+        text = f"{total_p} philosophers · {total_c} countries · {hint}"
         painter.setFont(QFont("Georgia", 9, QFont.Weight.Normal, True))
         fm = QFontMetrics(painter.font())
-        tw = fm.horizontalAdvance(text)
         painter.setPen(QColor(TEXT_DIM))
-        painter.drawText(self.width() - tw - 14, self.height() - 12, text)
+        painter.drawText(self.width() - fm.horizontalAdvance(text) - 14,
+                         self.height() - 12, text)
+
+    # ── Hit testing ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _hit(pos: QPointF, hits) -> object | None:
+        for pt, r, payload in hits:
+            dx, dy = pos.x() - pt.x(), pos.y() - pt.y()
+            if dx * dx + dy * dy <= r * r:
+                return payload
+        return None
+
+    def _action_at(self, pos: QPointF) -> tuple | None:
+        """The interactive thing under `pos`, respecting the current LOD mode."""
+        if self._city_mode():
+            p = self._hit(pos, self._philosopher_hits)
+            if p is not None:
+                return ("phil", p)
+            key = self._hit(pos, self._cluster_hits)
+            if key is not None:
+                return ("cluster", key)
+        else:
+            country = self._hit(pos, self._country_hits)
+            if country is not None:
+                return ("country", country)
+        return None
 
     # ── Mouse events ─────────────────────────────────────────────────────────
 
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pos = event.position()
-        # Check if pressing on a dot
-        for pt, r, country in self._dot_hits:
-            dx = pos.x() - pt.x()
-            dy = pos.y() - pt.y()
-            if dx * dx + dy * dy <= r * r:
-                self._press_dot_country = country
-                self._press_dot_pos = event.pos()
-                return
-        # Pressing on empty ocean/land → start pan
+        action = self._action_at(event.position())
+        if action is not None:
+            self._press_action = action
+            self._press_pos = event.pos()
+            return
         self._pan_anchor = event.pos()
         self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
 
     def mouseMoveEvent(self, event):
-        # ── Left-drag pan ────────────────────────────────────────────────────
         if self._pan_anchor is not None:
             delta = event.pos() - self._pan_anchor
             self._pan_offset += QPointF(delta.x(), delta.y())
             self._pan_anchor = event.pos()
-            self._hover_country = None          # suppress hover while panning
+            self._clear_hover()
             QToolTip.hideText()
             self.update()
             return
 
-        # ── Pressed on dot but now dragging — promote to pan ─────────────────
-        if self._press_dot_country is not None and self._press_dot_pos is not None:
-            if (event.pos() - self._press_dot_pos).manhattanLength() > self._DRAG_THRESHOLD:
+        if self._press_action is not None and self._press_pos is not None:
+            if (event.pos() - self._press_pos).manhattanLength() > self._DRAG_THRESHOLD:
                 self._pan_anchor = event.pos()
-                self._press_dot_country = None
-                self._press_dot_pos = None
+                self._press_action = None
+                self._press_pos = None
                 self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             return
 
-        # ── Hover detection ──────────────────────────────────────────────────
-        pos = event.position()
-        hovered = None
-        for pt, r, country in self._dot_hits:
-            dx = pos.x() - pt.x()
-            dy = pos.y() - pt.y()
-            if dx * dx + dy * dy <= r * r:
-                hovered = country
-                break
-
-        if hovered != self._hover_country:
-            self._hover_country = hovered
-            self.update()
-            if hovered:
-                count = self._country_counts.get(hovered, 0)
-                names = [p.name for p in self._philosophers
-                        if p.birth_country == hovered]
-                preview = ", ".join(names[:6])
-                if len(names) > 6:
-                    preview += f" + {len(names) - 6} more"
-                tip = f"<b>{hovered}</b><br>{count} philosopher{'s' if count != 1 else ''}"
-                if preview:
-                    tip += f"<br><i>{preview}</i>"
-                QToolTip.showText(self.mapToGlobal(event.pos()), tip, self)
-            else:
-                QToolTip.hideText()
-
-        self.setCursor(QCursor(
-            Qt.CursorShape.PointingHandCursor if hovered else Qt.CursorShape.ArrowCursor
-        ))
+        self._update_hover(event)
 
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        # End a pan
         if self._pan_anchor is not None:
             self._pan_anchor = None
             self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
             return
-        # Clean tap on a dot → filter by country
-        country = self._press_dot_country
-        self._press_dot_country = None
-        self._press_dot_pos = None
-        if country:
-            self.country_clicked.emit(country)
+        action = self._press_action
+        self._press_action = None
+        self._press_pos = None
+        if action is not None:
+            kind, payload = action
+            if kind == "country":
+                self.country_clicked.emit(payload)
+            elif kind == "phil":
+                self.philosopher_clicked.emit(payload.id)
+            elif kind == "cluster":
+                self._expanded_city = None if self._expanded_city == payload else payload
+                self.update()
+            return
+        # Click on empty space collapses an open cluster
+        if self._expanded_city is not None:
+            self._expanded_city = None
+            self.update()
+
+    def _clear_hover(self):
+        self._hover_country = None
+        self._hover_cluster = None
+        self._hover_phil_id = None
+
+    def _update_hover(self, event):
+        pos = event.position()
+        hp = hc = hcountry = None
+        if self._city_mode():
+            hp = self._hit(pos, self._philosopher_hits)
+            if hp is None:
+                hc = self._hit(pos, self._cluster_hits)
+        else:
+            hcountry = self._hit(pos, self._country_hits)
+
+        new_pid = hp.id if hp else None
+        changed = (new_pid != self._hover_phil_id or hc != self._hover_cluster
+                   or hcountry != self._hover_country)
+        self._hover_phil_id = new_pid
+        self._hover_cluster = hc
+        self._hover_country = hcountry
+
+        if changed:
+            self.update()
+            self._show_tooltip(event, hp, hc, hcountry)
+
+        over = hp is not None or hc is not None or hcountry is not None
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor if over
+                               else Qt.CursorShape.ArrowCursor))
+
+    def _show_tooltip(self, event, hp, hc, hcountry):
+        gpos = self.mapToGlobal(event.pos())
+        if hp is not None:
+            tip = (f"<b>{hp.name}</b><br>{hp.lifespan_label}"
+                   f"<br><i>{hp.birth_city or '—'}, {hp.birth_country}</i>")
+            QToolTip.showText(gpos, tip, self)
+        elif hc is not None:
+            entry = self._city_by_key.get(hc)
+            if entry:
+                names = ", ".join(p.name for p in entry["phils"][:6])
+                if len(entry["phils"]) > 6:
+                    names += f" + {len(entry['phils']) - 6} more"
+                QToolTip.showText(
+                    gpos,
+                    f"<b>{entry['city']}</b> · {entry['country']}"
+                    f"<br>{len(entry['phils'])} philosophers<br><i>{names}</i><br>"
+                    f"<span style='color:#888'>click to expand</span>", self)
+        elif hcountry is not None:
+            count = self._country_counts.get(hcountry, 0)
+            names = [p.name for p in self._philosophers if p.birth_country == hcountry]
+            preview = ", ".join(names[:6])
+            if len(names) > 6:
+                preview += f" + {len(names) - 6} more"
+            tip = f"<b>{hcountry}</b><br>{count} philosopher{'s' if count != 1 else ''}"
+            if preview:
+                tip += f"<br><i>{preview}</i>"
+            QToolTip.showText(gpos, tip, self)
+        else:
+            QToolTip.hideText()
 
     def wheelEvent(self, event):
-        """Ctrl + scroll = zoom (anchored on cursor). Plain scroll pans."""
+        """Ctrl + scroll = zoom (anchored on cursor); plain scroll pans."""
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             delta = event.angleDelta().y()
             factor = 1.12 if delta > 0 else 1 / 1.12
             self._zoom_to(factor, event.position())
             event.accept()
         else:
-            # Two-finger swipe pan (vertical → vertical, horizontal → horizontal)
             dx = event.angleDelta().x()
             dy = event.angleDelta().y()
             self._pan_offset += QPointF(dx * 0.5, dy * 0.5)
@@ -415,16 +668,13 @@ class WorldMapCanvas(QWidget):
             event.accept()
 
     def event(self, ev):
-        """Handle native trackpad pinch-to-zoom."""
-        from PyQt6.QtCore import QEvent
+        """Native trackpad pinch-to-zoom."""
         if ev.type() == QEvent.Type.NativeGesture:
             try:
                 from PyQt6.QtGui import QNativeGestureEvent
-                from PyQt6.QtCore import Qt as _Qt
                 if isinstance(ev, QNativeGestureEvent):
-                    if ev.gestureType() == _Qt.NativeGestureType.ZoomNativeGesture:
-                        factor = 1.0 + ev.value()
-                        self._zoom_to(factor, ev.position())
+                    if ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+                        self._zoom_to(1.0 + ev.value(), ev.position())
                         ev.accept()
                         return True
             except Exception:
@@ -432,8 +682,8 @@ class WorldMapCanvas(QWidget):
         return super().event(ev)
 
     def leaveEvent(self, event):
-        if self._hover_country is not None:
-            self._hover_country = None
+        if self._hover_country or self._hover_cluster or self._hover_phil_id is not None:
+            self._clear_hover()
             self.update()
             QToolTip.hideText()
 
@@ -443,6 +693,7 @@ class WorldMapCanvas(QWidget):
 class WorldMapView(QWidget):
     """Wraps the canvas with a thin header bar."""
     country_clicked = pyqtSignal(str)
+    philosopher_clicked = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -465,7 +716,7 @@ class WorldMapView(QWidget):
         title.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9px; letter-spacing: 2px; background: transparent;")
         hl.addWidget(title)
 
-        sub = QLabel("Birth countries · click any dot to filter")
+        sub = QLabel("Birth places · zoom in to reveal cities")
         sub.setStyleSheet(f"color: {GOLD_DIM}; font-size: 11px; background: transparent; font-style: italic;")
         hl.addWidget(sub)
 
@@ -481,6 +732,7 @@ class WorldMapView(QWidget):
 
         self.canvas = WorldMapCanvas()
         self.canvas.country_clicked.connect(self.country_clicked)
+        self.canvas.philosopher_clicked.connect(self.philosopher_clicked)
         layout.addWidget(self.canvas, stretch=1)
 
     def set_philosophers(self, philosophers: list[Philosopher]):

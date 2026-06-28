@@ -611,6 +611,7 @@ class MainWindow(QMainWindow):
         # TAB_MAP = 3
         self.map_view = WorldMapView()
         self.map_view.country_clicked.connect(self._on_map_country_clicked)
+        self.map_view.philosopher_clicked.connect(self._on_philosopher_clicked)
         self.tabs.addTab(self.map_view, "🗺  World Map")
 
         # TAB_STATS = 4
