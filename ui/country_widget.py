@@ -11,6 +11,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QObject
 from PyQt6.QtGui import QColor, QPainter, QLinearGradient, QBrush, QPen, QPainterPath
 from database import Philosopher
+import library
+from ui import image_utils
 from styles import (
     GOLD, GOLD_DIM, GOLD_MUTED, BG_BASE, BG_SURFACE, BG_RAISED, BG_HOVER,
     BORDER, BORDER_LT, TEXT_PRI, TEXT_SEC, TEXT_DIM, COUNTRY_COLORS, ERA_COLORS
@@ -28,18 +30,49 @@ class PhilosopherCard(QWidget):
     """A compact clickable card for a single philosopher."""
     clicked = pyqtSignal(int)
 
+    # Card geometry — an avatar on the left, text block on the right.
+    _W, _H = 236, 112
+    _AV = 78                          # avatar square size (logical px)
+    _AV_X, _AV_Y = 13, (112 - 78) // 2
+    _TX = _AV_X + _AV + 14            # text block left edge
+
     def __init__(self, philosopher: Philosopher, accent: str, parent=None):
         super().__init__(parent)
         self.p = philosopher
         self.accent = accent
         self._hovered = False
-        self.setFixedSize(200, 110)
+        self._avatar_pm = None        # lazily built, cached per card
+        self._avatar_dpr = 0.0
+        self.setFixedSize(self._W, self._H)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
 
+    def _avatar(self):
+        """Return the framed portrait pixmap (or monogram fallback), cached."""
+        dpr = self.devicePixelRatioF() or 1.0
+        if self._avatar_pm is not None and abs(dpr - self._avatar_dpr) < 0.01:
+            return self._avatar_pm
+        abs_path = library.abs_path(self.p.portrait_path)
+        pm = None
+        if abs_path:
+            pm = image_utils.framed_pixmap(
+                abs_path, self._AV, self._AV, dpr,
+                radius=10, border_color=self.accent, border_width=1.5,
+            )
+        if pm is None:
+            pm = image_utils.monogram_pixmap(
+                self.p.name, self._AV, self._AV, dpr, radius=10,
+                bg=BG_RAISED, fg=self.accent, border_color=self.accent, border_width=1.5,
+            )
+        self._avatar_pm = pm
+        self._avatar_dpr = dpr
+        return pm
+
     def paintEvent(self, event):
+        from PyQt6.QtGui import QFont, QFontMetrics
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         r = self.rect().adjusted(1, 1, -1, -1)
         accent = QColor(self.accent)
@@ -65,36 +98,42 @@ class PhilosopherCard(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(r, 8, 8)
 
+        # Avatar (framed portrait or monogram fallback)
+        painter.drawPixmap(self._AV_X, self._AV_Y, self._avatar())
+
+        tx = self._TX
+        tw = self._W - tx - 12
+
         # Era chip
         era_col = QColor(ERA_COLORS.get(self.p.era, "#4A5E7E"))
         era_col.setAlpha(120)
         painter.setBrush(QBrush(era_col))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(14, 8, 80, 14, 3, 3)
+        chip_w = min(tw, 96)
+        painter.drawRoundedRect(tx, 12, chip_w, 14, 3, 3)
 
         painter.setPen(QColor("white"))
-        painter.setFont(self.font())
-        from PyQt6.QtGui import QFont
-        f = QFont("Georgia", 7)
-        painter.setFont(f)
-        painter.drawText(14, 8, 80, 14, Qt.AlignmentFlag.AlignCenter, self.p.era)
+        ef = QFont("Georgia", 7)
+        painter.setFont(ef)
+        era_text = QFontMetrics(ef).elidedText(self.p.era, Qt.TextElideMode.ElideRight, chip_w - 8)
+        painter.drawText(tx, 12, chip_w, 14, Qt.AlignmentFlag.AlignCenter, era_text)
 
-        # Name
-        from PyQt6.QtGui import QFont, QFontMetrics
+        # Name (elided to fit the available width)
         name_font = QFont("Georgia", 11, QFont.Weight.Bold)
         painter.setFont(name_font)
         painter.setPen(QColor("white") if self._hovered else QColor(TEXT_PRI))
-        painter.drawText(14, 26, 178, 30,
-                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                        self.p.name)
+        name_text = QFontMetrics(name_font).elidedText(self.p.name, Qt.TextElideMode.ElideRight, tw)
+        painter.drawText(tx, 31, tw, 24,
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         name_text)
 
         # Lifespan
         lf = QFont("Georgia", 9, QFont.Weight.Normal, True)
         painter.setFont(lf)
         painter.setPen(QColor(TEXT_SEC))
-        painter.drawText(14, 56, 178, 18,
-                        Qt.AlignmentFlag.AlignLeft,
-                        self.p.lifespan_label)
+        painter.drawText(tx, 57, tw, 16,
+                         Qt.AlignmentFlag.AlignLeft,
+                         self.p.lifespan_label)
 
         # Quote teaser
         if self.p.quotes:
@@ -102,11 +141,11 @@ class PhilosopherCard(QWidget):
             painter.setFont(qf)
             painter.setPen(QColor(TEXT_DIM))
             q = self.p.quotes[0].text
-            if len(q) > 48:
-                q = q[:46] + "…"
-            painter.drawText(14, 76, 178, 26,
-                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                            f"\u201c{q}\u201d")
+            if len(q) > 52:
+                q = q[:50] + "…"
+            painter.drawText(tx, 76, tw, 28,
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                             f"“{q}”")
 
         painter.end()
 

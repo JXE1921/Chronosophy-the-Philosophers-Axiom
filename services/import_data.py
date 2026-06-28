@@ -12,11 +12,14 @@ Returns (ok: bool, message: str).
 
 import csv
 import json
+import base64
 
 from database import (
     Philosopher,
     add_philosopher_with_quotes,
     clear_all_philosophers,
+    set_portrait,
+    save_works,
 )
 
 
@@ -112,7 +115,7 @@ def _validate_json_records(records: list) -> list[str]:
 
 
 def _insert_json_record(rec: dict) -> None:
-    """Build a Philosopher + quotes from a JSON record and insert it."""
+    """Build a Philosopher (+ quotes, portrait, works) from a JSON record and insert it."""
     p = Philosopher(
         id=0,
         name=str(rec["name"]).strip(),
@@ -135,7 +138,36 @@ def _insert_json_record(rec: dict) -> None:
         if text:
             quotes.append({"text": text, "is_favourite": is_fav})
 
-    add_philosopher_with_quotes(p, quotes)
+    pid = add_philosopher_with_quotes(p, quotes)
+
+    # Restore the portrait (base64) if the backup carried one
+    portrait = rec.get("portrait")
+    if isinstance(portrait, dict) and portrait.get("data"):
+        try:
+            data = base64.b64decode(portrait["data"])
+            set_portrait(pid, data, str(portrait.get("ext", "png")))
+        except Exception:
+            pass   # a corrupt image must not abort the whole import
+
+    # Restore works + any embedded files
+    specs = []
+    for w in rec.get("works", []):
+        if not isinstance(w, dict):
+            continue
+        title = str(w.get("title", "")).strip()
+        if not title:
+            continue
+        spec = {"id": None, "title": title, "file": "none"}
+        if w.get("file_data"):
+            try:
+                spec["data"] = base64.b64decode(w["file_data"])
+                spec["filename"] = str(w.get("filename", "file"))
+                spec["file"] = "bytes"
+            except Exception:
+                spec["file"] = "none"
+        specs.append(spec)
+    if specs:
+        save_works(pid, specs)
 
 
 # ─── CSV import ──────────────────────────────────────────────────────────────
@@ -245,7 +277,17 @@ def _insert_csv_row(row: dict) -> None:
         if text:
             quotes.append({"text": text, "is_favourite": False})
 
-    add_philosopher_with_quotes(p, quotes)
+    pid = add_philosopher_with_quotes(p, quotes)
+
+    # "Works" is an optional column (older CSVs predate it). Titles only — CSV
+    # cannot carry the attached files.
+    specs = []
+    for title in str(row.get("Works", "")).split(_QUOTE_SEP):
+        title = title.strip()
+        if title:
+            specs.append({"id": None, "title": title, "file": "none"})
+    if specs:
+        save_works(pid, specs)
 
 
 # ─── Shared helper ────────────────────────────────────────────────────────────

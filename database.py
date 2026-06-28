@@ -9,6 +9,13 @@ v9 additions:
 - get_random_quote (used by the New Quote button — no more raw SQL in UI)
 - get_statistics for the stats view
 - get_teacher_graph_edges for the influence graph
+
+v15 additions:
+- philosophers.portrait_path column (relative path into the library/ store)
+- works table (title + optional attached file) with file-aware CRUD
+- file attachments are managed through the `library` module; this layer only
+  ever stores/returns relative paths and is responsible for tidying the
+  backing files when rows are removed.
 """
 
 import sqlite3
@@ -17,6 +24,8 @@ import random
 from datetime import date
 from dataclasses import dataclass, field
 from typing import Optional
+
+import library
 
 # ─── Database path (sits next to the script) ────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "philosophers.db")
@@ -33,6 +42,22 @@ class Quote:
 
 
 @dataclass
+class Work:
+    """A work written by — or inspired by — a philosopher, with an optional
+    attached file (stored in the library/ folder; ``file_path`` is relative)."""
+    id: int
+    philosopher_id: int
+    title: str
+    file_path: str = ""                 # relative path in the library store ("" = none)
+    original_filename: str = ""         # the name the user's file had on attach
+    sort_order: int = 0
+
+    @property
+    def has_file(self) -> bool:
+        return bool(self.file_path)
+
+
+@dataclass
 class Philosopher:
     id: int
     name: str
@@ -42,7 +67,13 @@ class Philosopher:
     birth_country: str
     teachers: str                       # comma-separated names (kept for back-compat)
     contributions: str                  # rich text / paragraph
+    portrait_path: str = ""             # relative path into library/ ("" = no portrait)
     quotes: list[Quote] = field(default_factory=list)
+    works: list[Work] = field(default_factory=list)
+
+    @property
+    def has_portrait(self) -> bool:
+        return bool(self.portrait_path)
 
     @property
     def lifespan_label(self) -> str:
@@ -119,12 +150,28 @@ def initialise_db() -> None:
                 teacher_id  INTEGER NOT NULL REFERENCES philosophers(id) ON DELETE CASCADE,
                 UNIQUE(student_id, teacher_id)
             );
+
+            -- v15: works / bibliography (each row optionally points at a file in library/)
+            CREATE TABLE IF NOT EXISTS works (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                philosopher_id     INTEGER NOT NULL
+                                       REFERENCES philosophers(id) ON DELETE CASCADE,
+                title              TEXT    NOT NULL,
+                file_path          TEXT    NOT NULL DEFAULT '',
+                original_filename  TEXT    NOT NULL DEFAULT '',
+                sort_order         INTEGER NOT NULL DEFAULT 0
+            );
         """)
 
         # ── Migration: add is_favourite column to quotes if missing ──
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(quotes)").fetchall()}
         if "is_favourite" not in cols:
             conn.execute("ALTER TABLE quotes ADD COLUMN is_favourite INTEGER NOT NULL DEFAULT 0")
+
+        # ── Migration: add portrait_path column to philosophers if missing ──
+        p_cols = {r["name"] for r in conn.execute("PRAGMA table_info(philosophers)").fetchall()}
+        if "portrait_path" not in p_cols:
+            conn.execute("ALTER TABLE philosophers ADD COLUMN portrait_path TEXT NOT NULL DEFAULT ''")
 
     # Seed sample data only on very first run (empty philosophers table)
     if not get_all_philosophers():
@@ -194,7 +241,8 @@ def get_philosopher(pid: int) -> Optional[Philosopher]:
         if not row:
             return None
         quotes = _get_quotes_for(conn, pid)
-        return _row_to_philosopher(row, quotes)
+        works = _get_works_for(conn, pid)
+        return _row_to_philosopher(row, quotes, works)
 
 
 def add_philosopher(p: Philosopher, quote_texts: list[str]) -> int:
@@ -351,18 +399,34 @@ def update_philosopher(p: Philosopher, quote_texts: list[str]) -> None:
 
 
 def delete_philosopher(pid: int) -> None:
+    # Gather the backing files first; the DB cascade will drop the rows but it
+    # cannot reach into the library/ folder, so we tidy those ourselves.
     with _connect() as conn:
+        portrait = conn.execute(
+            "SELECT portrait_path FROM philosophers WHERE id=?", (pid,)
+        ).fetchone()
+        work_files = conn.execute(
+            "SELECT file_path FROM works WHERE philosopher_id=? AND file_path != ''",
+            (pid,)
+        ).fetchall()
         conn.execute("DELETE FROM philosophers WHERE id=?", (pid,))
-    # Cascade also clears teacher_links for this row, no rebuild needed
+    # Cascade also clears quotes / works / teacher_links for this row.
+
+    if portrait and portrait["portrait_path"]:
+        library.delete(portrait["portrait_path"])
+    for r in work_files:
+        library.delete(r["file_path"])
 
 
 def clear_all_philosophers() -> None:
-    """Delete every philosopher (and their quotes/links) from the database.
+    """Delete every philosopher (and their quotes/works/links) from the database.
     Used by the import service before a full replace-import."""
     with _connect() as conn:
         conn.execute("DELETE FROM philosophers")
         conn.execute("DELETE FROM teacher_links")
         conn.execute("DELETE FROM daily_quote")
+    # Remove every attached file so a restored backup starts from a clean store.
+    library.clear_all()
 
 
 def search_philosophers(query: str, country: str = "",
@@ -398,6 +462,133 @@ def get_all_countries() -> list[str]:
             "SELECT DISTINCT birth_country FROM philosophers ORDER BY birth_country"
         ).fetchall()
         return [r["birth_country"] for r in rows if r["birth_country"]]
+
+
+# ─── Portraits ───────────────────────────────────────────────────────────────
+
+def get_portrait_path(pid: int) -> str:
+    """Return the relative portrait path for a philosopher, or '' if none."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT portrait_path FROM philosophers WHERE id=?", (pid,)
+        ).fetchone()
+        return (row["portrait_path"] if row else "") or ""
+
+
+def set_portrait(pid: int, data: bytes, ext: str) -> str:
+    """Store already-normalised portrait bytes for a philosopher.
+
+    Writes the bytes into the library store, points the philosopher row at the
+    new file, and removes the previously-stored portrait (if any). Returns the
+    new relative path.
+    """
+    old = get_portrait_path(pid)
+    rel = library.save_portrait_bytes(data, ext)
+    with _connect() as conn:
+        conn.execute("UPDATE philosophers SET portrait_path=? WHERE id=?", (rel, pid))
+    if old and old != rel:
+        library.delete(old)
+    return rel
+
+
+def clear_portrait(pid: int) -> None:
+    """Remove a philosopher's portrait (row pointer + backing file)."""
+    old = get_portrait_path(pid)
+    with _connect() as conn:
+        conn.execute("UPDATE philosophers SET portrait_path='' WHERE id=?", (pid,))
+    if old:
+        library.delete(old)
+
+
+# ─── Works / bibliography ────────────────────────────────────────────────────
+
+def get_works(pid: int) -> list[Work]:
+    """Return a philosopher's works (metadata only — no file bytes)."""
+    with _connect() as conn:
+        return _get_works_for(conn, pid)
+
+
+def add_work(pid: int, title: str, file_path: str = "",
+             original_filename: str = "", sort_order: int = 0) -> int:
+    """Insert a single work row (file already in the library store). Returns id."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO works (philosopher_id, title, file_path, original_filename, sort_order)
+               VALUES (?,?,?,?,?)""",
+            (pid, title.strip(), file_path, original_filename, sort_order)
+        )
+        return cur.lastrowid
+
+
+def save_works(pid: int, specs: list[dict]) -> None:
+    """Reconcile a philosopher's works against a list of specs from the form.
+
+    Each spec is a dict::
+
+        {
+          "id":     int | None,        # existing work id, or None for a new row
+          "title":  str,
+          "file":   "keep" | "remove" | "new" | "bytes" | "none",
+          "source": str,               # filesystem path  (file == "new")
+          "data":   bytes,             # raw bytes        (file == "bytes")
+          "filename": str,             # original name    (file == "bytes")
+        }
+
+    The diff is file-aware: untouched attachments are left exactly where they
+    are, replaced/removed ones have their old file deleted, and works dropped
+    from the form are deleted outright (file and row).
+    """
+    with _connect() as conn:
+        existing = {w.id: w for w in _get_works_for(conn, pid)}
+        seen: set[int] = set()
+
+        for order, spec in enumerate(specs):
+            title = (spec.get("title") or "").strip()
+            if not title:
+                continue
+            action = spec.get("file", "none")
+            wid = spec.get("id")
+
+            if wid in existing:
+                seen.add(wid)
+                old = existing[wid]
+                path, fname = old.file_path, old.original_filename
+                if action == "remove":
+                    if old.file_path:
+                        library.delete(old.file_path)
+                    path, fname = "", ""
+                elif action == "new":
+                    if old.file_path:
+                        library.delete(old.file_path)
+                    path, fname = library.import_work_file(spec["source"])
+                elif action == "bytes":
+                    if old.file_path:
+                        library.delete(old.file_path)
+                    path, fname = library.save_work_bytes(spec["data"], spec.get("filename", "file"))
+                # "keep" / "none" → leave the existing file untouched
+                conn.execute(
+                    """UPDATE works SET title=?, file_path=?, original_filename=?, sort_order=?
+                       WHERE id=?""",
+                    (title, path, fname, order, wid)
+                )
+            else:
+                path, fname = "", ""
+                if action == "new":
+                    path, fname = library.import_work_file(spec["source"])
+                elif action == "bytes":
+                    path, fname = library.save_work_bytes(spec["data"], spec.get("filename", "file"))
+                conn.execute(
+                    """INSERT INTO works (philosopher_id, title, file_path, original_filename, sort_order)
+                       VALUES (?,?,?,?,?)""",
+                    (pid, title, path, fname, order)
+                )
+
+        # Delete works the user removed from the form (and their files).
+        for wid, w in existing.items():
+            if wid not in seen:
+                if w.file_path:
+                    library.delete(w.file_path)
+                conn.execute("DELETE FROM works WHERE id=?", (wid,))
 
 
 # ─── Daily Quote ─────────────────────────────────────────────────────────────
@@ -570,7 +761,25 @@ def _get_quotes_for(conn: sqlite3.Connection, pid: int) -> list[Quote]:
     ]
 
 
-def _row_to_philosopher(row: sqlite3.Row, quotes: list[Quote]) -> Philosopher:
+def _get_works_for(conn: sqlite3.Connection, pid: int) -> list[Work]:
+    rows = conn.execute(
+        """SELECT id, philosopher_id, title, file_path, original_filename, sort_order
+           FROM works WHERE philosopher_id=? ORDER BY sort_order, id""",
+        (pid,)
+    ).fetchall()
+    return [
+        Work(id=r["id"], philosopher_id=r["philosopher_id"], title=r["title"],
+             file_path=r["file_path"], original_filename=r["original_filename"],
+             sort_order=r["sort_order"])
+        for r in rows
+    ]
+
+
+def _row_to_philosopher(row: sqlite3.Row, quotes: list[Quote],
+                        works: Optional[list[Work]] = None) -> Philosopher:
+    # portrait_path is added by migration; guard for any pre-migration row read.
+    keys = row.keys()
+    portrait = row["portrait_path"] if "portrait_path" in keys else ""
     return Philosopher(
         id=row["id"],
         name=row["name"],
@@ -580,7 +789,9 @@ def _row_to_philosopher(row: sqlite3.Row, quotes: list[Quote]) -> Philosopher:
         birth_country=row["birth_country"],
         teachers=row["teachers"],
         contributions=row["contributions"],
+        portrait_path=portrait or "",
         quotes=quotes,
+        works=works or [],
     )
 
 

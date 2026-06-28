@@ -10,6 +10,8 @@ Statistics Tab — At-a-glance insights including era and country breakdowns, to
 Daily Wisdom Widget — An elegant quote panel that automatically selects a new quote each day, with smooth fade transitions and a favouriting system.
 Search & Filtering — Filter by name, country, era, and favourited quotes. Sort by lifespan or alphabetically.
 Philosopher Management — A clean form to add, edit, and delete philosophers, with support for multiple quotes and teacher/influence links.
+Portraits — Upload a picture for any philosopher; it is auto-oriented, capped in resolution, and shown as a centre-cropped framed portrait throughout the app (profile, country cards, comparison), with an elegant monogram fallback when no picture is set.
+Works & Bibliography — Record the works written by — or inspired by — each philosopher, and optionally attach the actual files (PDF, ePub, text, …). Attachments open in their default app straight from the profile. Pictures and files are kept in a local library/ folder; JSON export embeds them so a single export is a complete, restorable backup.
 Comparison Dialog — Side-by-side comparison of any two philosophers.
 Export — Export your full database to CSV or JSON via the File menu.
 Customisable Keyboard Shortcuts — Full keyboard navigation (Ctrl+1–5 for tabs, Ctrl+N, Ctrl+F, F11, and more), all rebindable from Help → Keyboard Shortcuts. Click any binding, press a new combination, and it applies instantly — with conflict detection and reset-to-default for a single shortcut or the whole set. Custom bindings persist between sessions.

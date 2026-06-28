@@ -38,6 +38,7 @@ from ui.comparison_dialog import ComparisonDialog
 from ui.about_dialog import AboutDialog
 from ui.shortcuts_dialog import ShortcutsDialog
 from ui.shortcut_manager import ShortcutManager
+from ui import image_utils
 from services.export import export_csv, export_json
 from services.import_data import import_json as _import_json, import_csv as _import_csv
 
@@ -1104,6 +1105,7 @@ class MainWindow(QMainWindow):
             return
         ok, msg = _import_json(path)
         if ok:
+            image_utils.clear_cache()      # old portraits were replaced wholesale
             self.quote_widget.refresh()
             self._load_data()
             self.stats_view.refresh()
@@ -1129,6 +1131,7 @@ class MainWindow(QMainWindow):
             return
         ok, msg = _import_csv(path)
         if ok:
+            image_utils.clear_cache()      # old portraits were replaced wholesale
             self.quote_widget.refresh()
             self._load_data()
             self.stats_view.refresh()

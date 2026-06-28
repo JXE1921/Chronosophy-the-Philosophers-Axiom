@@ -11,6 +11,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from database import Philosopher
+import library
+from ui import image_utils
 from styles import (
     GOLD, GOLD_LIGHT, GOLD_DIM, BG_BASE, BG_SURFACE, BG_RAISED,
     BORDER, BORDER_LT, TEXT_PRI, TEXT_SEC, TEXT_DIM, ERA_COLORS
@@ -24,6 +26,7 @@ class ComparisonDialog(QDialog):
         super().__init__(parent)
         self.left = left
         self.right = right
+        self._portraits = []          # (QLabel, Philosopher) — refreshed on show
         self.setWindowTitle(f"Compare: {left.name} vs {right.name}")
         self.setMinimumSize(960, 720)
         self.setModal(True)
@@ -105,9 +108,9 @@ class ComparisonDialog(QDialog):
 
         era_color = ERA_COLORS.get(p.era, "#4A5E7E")
 
-        # Banner
+        # Banner — portrait + identity
         banner = QWidget()
-        banner.setFixedHeight(96)
+        banner.setFixedHeight(104)
         banner.setStyleSheet(f"""
             background: qlineargradient(
                 x1:0, y1:0, x2:1, y2:1,
@@ -116,27 +119,43 @@ class ComparisonDialog(QDialog):
             );
             border-radius: 8px;
         """)
-        bl = QVBoxLayout(banner)
-        bl.setContentsMargins(20, 14, 20, 14)
-        bl.setSpacing(2)
+        bl = QHBoxLayout(banner)
+        bl.setContentsMargins(18, 12, 18, 12)
+        bl.setSpacing(14)
+
+        portrait = QLabel()
+        portrait.setFixedSize(76, 76)
+        portrait.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        portrait.setStyleSheet("background: transparent; border: none;")
+        portrait.setPixmap(self._portrait_pixmap(p, 76))
+        self._portraits.append((portrait, p))
+        bl.addWidget(portrait, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        text_col.addStretch()
 
         era_lbl = QLabel(p.era.upper())
         era_lbl.setStyleSheet(
             "color: rgba(255,255,255,0.55); font-size: 9px; letter-spacing: 2.5px; background: transparent;"
         )
-        bl.addWidget(era_lbl)
+        text_col.addWidget(era_lbl)
 
         name_lbl = QLabel(p.name)
+        name_lbl.setWordWrap(True)
         name_lbl.setStyleSheet(
             "color: white; font-family: 'Georgia', serif; font-size: 20px; background: transparent;"
         )
-        bl.addWidget(name_lbl)
+        text_col.addWidget(name_lbl)
 
         life_lbl = QLabel(p.lifespan_label)
         life_lbl.setStyleSheet(
             "color: rgba(255,255,255,0.65); font-size: 12px; font-style: italic; background: transparent;"
         )
-        bl.addWidget(life_lbl)
+        text_col.addWidget(life_lbl)
+        text_col.addStretch()
+
+        bl.addLayout(text_col, stretch=1)
         layout.addWidget(banner)
 
         # Quick facts
@@ -145,6 +164,7 @@ class ComparisonDialog(QDialog):
             ("City", p.birth_city or "—"),
             ("Teachers", p.teachers or "—"),
             ("Quotes", str(len(p.quotes))),
+            ("Works", str(len(p.works))),
         ]
         for label, value in facts:
             row = QHBoxLayout()
@@ -221,3 +241,25 @@ class ComparisonDialog(QDialog):
             padding-bottom: 4px;
         """)
         return lbl
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Re-render both portraits at the real display dpr once on screen.
+        for label, p in self._portraits:
+            label.setPixmap(self._portrait_pixmap(p, 76))
+
+    def _portrait_pixmap(self, p: Philosopher, size: int):
+        dpr = self.devicePixelRatioF() or 1.0
+        abs_path = library.abs_path(p.portrait_path)
+        if abs_path:
+            pm = image_utils.framed_pixmap(
+                abs_path, size, size, dpr,
+                radius=12, border_color="rgba(255,255,255,0.35)", border_width=1.5,
+            )
+            if pm is not None:
+                return pm
+        return image_utils.monogram_pixmap(
+            p.name, size, size, dpr, radius=12,
+            bg="rgba(0,0,0,0.28)", fg="white",
+            border_color="rgba(255,255,255,0.35)", border_width=1.5,
+        )

@@ -1,3 +1,6 @@
 *.ico
 __pycache__/
 *.pyc
+
+# Attached portraits and work files (per-user content, not source)
+library/
