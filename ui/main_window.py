@@ -38,6 +38,7 @@ from ui.comparison_dialog import ComparisonDialog
 from ui.about_dialog import AboutDialog
 from ui.shortcuts_dialog import ShortcutsDialog
 from ui.shortcut_manager import ShortcutManager
+from ui.smooth_scroll import SmoothScroller
 from ui import image_utils
 from services.export import export_csv, export_json
 from services.import_data import import_json as _import_json, import_csv as _import_csv
@@ -516,6 +517,9 @@ class MainWindow(QMainWindow):
         self.philosopher_list.setSelectionMode(
             QListWidget.SelectionMode.ExtendedSelection
         )
+        # Eased, animated wheel scrolling so skimming the list glides instead of
+        # jumping a whole row per notch. (Keep a reference so it stays alive.)
+        self._list_scroller = SmoothScroller(self.philosopher_list)
         self.philosopher_list.itemDoubleClicked.connect(self._on_list_double_click)
         self.philosopher_list.itemSelectionChanged.connect(self._on_selection_changed)
         # Favourite cards are sized for the width at build time; rebuild them
